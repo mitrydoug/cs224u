@@ -153,8 +153,12 @@ class RandomData(DataSource):
 class MovieLensData(DataSource):
 
     user_ratings_fn = 'data/movielens/ratings.csv'
-    user_ratings_columns = ['user_id', 'movie_id', 'rating', 'timestamp']
-    user_ratings_dtypes  = ['int', 'int', 'float', 'int']
+    user_ratings_columns = [
+            ('user_id', 'int'),
+            ('movie_id', 'int'),
+            ('rating', 'float'),
+            ('timestamp', 'int')
+    ]
 
     movies_meta_fn = 'data/movielens/movies_meta.csv'
     movies_meta_columns = [
@@ -171,24 +175,25 @@ class MovieLensData(DataSource):
         ('popularity', 'float'),
         ('poster_path', 'str'),
         ('production_companies', 'str'),
-        'production_countries', 'release_date', 'revenue', 'runtime',
-        'spoken_languages', 'status', 'tagline', 'title', 'video',
-        'vote_average', 'vote_count'
-    ]
-    movies_meta_dtypes =  [
-        'bool',
-        'str',
-        'int',
-        'str',
-        'str',
-        'int', 'str', 'str', 'str',
-        'str', 'float', 'str', 'str', 'str', 'str', 'int', 'float',
-        'str', 'str', 'str', 'str', 'bool', 'float', 'int'
+        ('production_countries', 'str'),
+        ('release_date', 'str'),
+        ('revenue', 'int'),
+        ('runtime', 'float'),
+        ('spoken_languages', 'str'),
+        ('status', 'str'),
+        ('tagline', 'str'),
+        ('title', 'str'),
+        ('video', 'bool'),
+        ('vote_average', 'float',
+        ('vote_count', 'int')
     ]
     
     links_fn = 'data/movielens/links.csv'
-    links_columns = ['movie_id', 'imdb_id', 'tmdb_id']
-    links_dtypes = ['str', 'str', 'str']
+    links_columns = [
+        ('movie_id', 'str'),
+        ('imdb_id', 'str'),
+        ('tmdb_id', 'str')
+    ]
 
     def __init__(self, frac=1.0):
         """
@@ -198,14 +203,11 @@ class MovieLensData(DataSource):
         self.frac = frac
     
     def _raw_user_product_ratings(self):
-        dtypes = dict(zip(
-            MovieLensData.user_ratings_columns,
-            MovieLensData.user_ratings_dtypes))
         ratings = pd.read_csv(
             MovieLensData.user_ratings,
             header=None, skiprows=[0],
             names=ratings_columns,
-            dtype=dict(zip(ratings_columns, ratings_dtypes)))
+            dtype=dict(zip())
         ratings.drop('timestamp', axis=1, inplace=True)
         ratings.columns = ['user_id', 'product_id', 'rating']
         return ratings.sample(frac=self.frac)
