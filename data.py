@@ -69,9 +69,10 @@ class DataSource:
         #### Process user-product reviews ####
         ######################################
         assert set(up_rev.columns) == {'user_id', 'product_id', 'review'}
-        up_rev = (up_rev.groupby(['user_id', 'product_id']).apply(
-                  lambda df: max(df.review, key=lambda s: len(s)))
-                  .to_frame().reset_index().rename(columns={0:'review'}))
+        if not up_rev.empty:
+            up_rev = (up_rev.groupby(['user_id', 'product_id']).apply(
+                      lambda df: max(df.review, key=lambda s: len(s)))
+                      .to_frame().reset_index().rename(columns={0:'review'}))
         up_rev.user_id = up_rev.user_id.apply(lambda uid: user_ids[uid])
         up_rev.product_id = up_rev.product_id.apply(lambda pid: product_ids[pid])
 
@@ -154,13 +155,13 @@ class MovieLensData(DataSource):
 
     user_ratings_fn = 'data/movielens/ratings.csv'
     user_ratings_columns = [
-            ('user_id', 'int'),
-            ('movie_id', 'int'),
+            ('user_id', 'str'),
+            ('movie_id', 'str'),
             ('rating', 'float'),
             ('timestamp', 'int')
     ]
 
-    movies_meta_fn = 'data/movielens/movies_meta.csv'
+    movies_meta_fn = 'data/movielens/movies_metadata.csv'
     movies_meta_columns = [
         ('adult', 'bool'),
         ('belongs_to_collection', 'str'),
@@ -171,7 +172,7 @@ class MovieLensData(DataSource):
         ('imdb_id', 'str'),
         ('original_language', 'str'),
         ('original_title', 'str'),
-        ('overview', 'str')
+        ('overview', 'str'),
         ('popularity', 'float'),
         ('poster_path', 'str'),
         ('production_companies', 'str'),
@@ -184,7 +185,7 @@ class MovieLensData(DataSource):
         ('tagline', 'str'),
         ('title', 'str'),
         ('video', 'bool'),
-        ('vote_average', 'float',
+        ('vote_average', 'float'),
         ('vote_count', 'int')
     ]
     
@@ -201,25 +202,35 @@ class MovieLensData(DataSource):
         """
         DataSource.__init__(self)
         self.frac = frac
+        self.links = pd.read_csv(
+            MovieLensData.links_fn,
+            header=None, skiprows=[0],
+            names=[t[0] for t in MovieLensData.links_columns],
+            dtype=dict(MovieLensData.links_columns)
+        ).drop_duplicates(subset='tmdb_id')
     
     def _raw_user_product_ratings(self):
         ratings = pd.read_csv(
-            MovieLensData.user_ratings,
+            MovieLensData.user_ratings_fn,
             header=None, skiprows=[0],
-            names=ratings_columns,
-            dtype=dict(zip())
+            names=[t[0] for t in MovieLensData.user_ratings_columns],
+            dtype=dict(MovieLensData.user_ratings_columns))
         ratings.drop('timestamp', axis=1, inplace=True)
         ratings.columns = ['user_id', 'product_id', 'rating']
         return ratings.sample(frac=self.frac)
 
     def _raw_product_descriptions(self):
         movies_meta = pd.read_csv(
-            'movies_metadata.csv', header=None, skiprows=[0],
-            names=movie_meta_columns,
-            dtype=dict(zip(movie_meta_columns, movie_meta_dtypes))
+            MovieLensData.movies_meta_fn,
+            header=None, skiprows=[0],
+            names=[t[0] for t in MovieLensData.movies_meta_columns],
+            dtype=dict(MovieLensData.movies_meta_columns)
         ).drop_duplicates(subset='tmdb_id')
-        
-        
+        movies_meta.overview.fillna('', inplace=True)
+        merged = movies_meta.merge(self.links, how='left', on='tmdb_id')
+        return (merged[['movie_id', 'overview']]
+                .rename(columns={'movie_id': 'product_id',
+                                 'overview': 'description'}))
 
     def _raw_user_product_reviews(self):
-        pass
+        return pd.DataFrame([], columns=['user_id', 'product_id', 'review'])
