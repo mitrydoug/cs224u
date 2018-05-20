@@ -4,6 +4,9 @@ import itertools
 
 import numpy as np
 import pandas as pd
+import pickle
+
+import os
 
 # 1. user-product ratings
 # 2. product descriptions
@@ -16,15 +19,25 @@ class DataSource:
         # SENSITIVE PARAMETER, DO NOT CHANGE
         self.test_frac = 0.2
 
-    def get_dataset(self):
+    def get_train(self, path):
+        train_path = os.path.join(path, "train.p")
+        return pickle.load( open( train_path, "rb" ) )
+
+    def get_test(self, path):
+        train_path = os.path.join(path, "test.p")
+        return pickle.load( open( train_path, "rb" ) )
+
+    def save_dataset(self, output_dir=None):
 
         # load data from sub-class implementations
         up_rat = self._raw_user_product_ratings()
-        p_desc = self._raw_product_descriptions()
+        # NOTE: NOA removed 
+#         p_desc = self._raw_product_descriptions()
+        p_desc = pd.DataFrame()
         up_rev = self._raw_user_product_reviews()
 
         products = (set(up_rat.product_id) | 
-                    set(p_desc.product_id) |
+#                     set(p_desc.product_id) |
                     set(up_rev.product_id))
         users = set(up_rat.user_id) | set(up_rev.user_id)
 
@@ -59,11 +72,11 @@ class DataSource:
         ######################################
         #### Process product descriptions ####
         ######################################
-        assert set(p_desc.columns) == {'product_id', 'description'}
-        p_desc = (p_desc.groupby('product_id').apply(
-                  lambda df: max(df.description, key=lambda s: len(s)))
-                  .to_frame().reset_index().rename(columns={0: 'description'}))
-        p_desc.product_id = p_desc.product_id.apply(lambda pid: product_ids[pid])
+#         assert set(p_desc.columns) == {'product_id', 'description'}
+#         p_desc = (p_desc.groupby('product_id').apply(
+#                   lambda df: max(df.description, key=lambda s: len(s)))
+#                   .to_frame().reset_index().rename(columns={0: 'description'}))
+#         p_desc.product_id = p_desc.product_id.apply(lambda pid: product_ids[pid])
 
         ######################################
         #### Process user-product reviews ####
@@ -81,12 +94,31 @@ class DataSource:
         up_rev_test = merged[merged.rating.notna()].drop('rating', axis=1)
         up_rev_train = merged[merged.rating.isna()].drop('rating', axis=1)
 
+        if(output_dir is not None):
+            # TODO: make sure that dir does not exist
+            if(not os.path.isdir(output_dir)):
+                os.mkdir(output_dir)
+            train_path = os.path.join(output_dir, "train.p")
+            test_path  = os.path.join(output_dir, "test.p")
+#             os.mkdir(train_path) 
+#             os.mkdir(test_path) 
+            pickle.dump(  {'user_product_ratings': up_rat_train,
+    #                       'product_descriptions': p_desc,
+                             'user_product_reviews': up_rev_train},
+                               open( train_path, "wb" )
+                       )
+            pickle.dump( {'user_product_ratings': up_rat_test,
+#                       'product_descriptions': p_desc,
+                      'user_product_reviews': up_rev_test},
+                        open( test_path, "wb" )
+                       )
+            
         return {
             'train': {'user_product_ratings': up_rat_train,
-                      'product_descriptions': p_desc,
+#                       'product_descriptions': p_desc,
                       'user_product_reviews': up_rev_train},
             'test' : {'user_product_ratings': up_rat_test,
-                      'product_descriptions': p_desc,
+#                       'product_descriptions': p_desc,
                       'user_product_reviews': up_rev_test}}
 
     def _raw_user_product_ratings(self):
