@@ -1,4 +1,3 @@
-
 import hashlib
 import itertools
 
@@ -11,7 +10,6 @@ import os
 # 1. user-product ratings
 # 2. product descriptions
 # 3. user-product reviews
-
 
 class DataSource:
 
@@ -29,7 +27,7 @@ class DataSource:
     def get_dataset(self, load_cache=True, save_cache=True):
 
         data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                 self.data_name)
+                                 'preprocessed_datasets', self.data_name)
         train_path = os.path.join(data_path, 'train.p')
         test_path  = os.path.join(data_path, 'test.p')
         if load_cache and os.path.isfile(train_path) \
@@ -110,7 +108,7 @@ class DataSource:
 
         if save_cache:
             if not os.path.isdir(data_path):
-                os.mkdir(data_path)
+                os.makedirs(data_path)
             if os.path.isfile(train_path):
                 os.remove(train_path)
             if os.path.isfile(test_path):
