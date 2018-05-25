@@ -18,10 +18,12 @@ class RecommenderModel:
 class RandomModel(RecommenderModel):
 
     def fit(self, data):
-        pass
+        self.ratings = list(set(data['user_product_ratings'].rating))
 
     def predict(self, users_products):
-        return pd.Series(np.random.choice(8, len(users_products)+1)/2.)
+        return pd.Series(
+                np.random.choice(self.ratings, len(users_products)),
+                index = users_products.index)
 
 
 class ItemItemCollaborationModel(RecommenderModel):
