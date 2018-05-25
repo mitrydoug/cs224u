@@ -47,9 +47,9 @@ class DataSource:
         self.max_rev_len = max_rev_len
         self.rnd_state = rnd_state
         self.data_name = (f'{self.__class__.__name__}'
-                          f'__mn_ur({self.min_user_ratings})'
-                          f'__mn_pv({self.min_product_reviews})'
-                          f'__require_pd({self.require_product_description})')
+                          f'__mn_ur.{self.min_user_ratings}'
+                          f'__mn_pv.{self.min_product_reviews}'
+                          f'__require_pd.{self.require_product_description}')
 
     def get_test(self, load_cache=True, save_cache=True):
         return self.get_dataset(load_cache=load_cache, save_cache=save_cache)['test']
