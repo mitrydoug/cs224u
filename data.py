@@ -3,120 +3,309 @@ import itertools
 
 import numpy as np
 import pandas as pd
-import pickle
-
+import json
 import os
-
-# 1. user-product ratings
-# 2. product descriptions
-# 3. user-product reviews
+import re
 
 class DataSource:
 
-    def __init__(self):
-        # SENSITIVE PARAMETER, DO NOT CHANGE
-        self.test_frac = 0.2
-        self.data_name = self.__class__.__name__
+    def __init__(self, min_user_ratings=5,
+                       min_product_reviews=1,
+                       require_product_description=True,
+                       min_desc_len=10,
+                       max_desc_len=1000,
+                       min_rev_len=3,
+                       max_rev_len=1000,
+                       rnd_state=None):
+        # 
+        #       Products
+        #      -----------
+        #     |       |   |
+        #   U | cell  |   |
+        #   s | hold- |   |
+        #   e |  out  |   |
+        #   r |       |   |
+        #   s |-------|---|
+        #     |       |   | <- user_holdout
+        #      -----------
+        #               ^ product_holdout
+        #              
+        ### SENSITIVE PARAMETERS, DO NOT CHANGE ###
+        self.test_cell_holdout = 0.1
+        self.test_user_holdout = 0.1
+        self.test_product_holdout = 0.1
+        self.val_cell_holdout = 0.1
+        self.val_user_holdout = 0.1
+        self.val_product_holdout = 0.1
+        ###########################################
+        self.min_user_ratings = min_user_ratings
+        self.min_product_reviews = min_product_reviews
+        self.require_product_description = True
+        self.min_desc_len = min_desc_len
+        self.max_desc_len = max_desc_len
+        self.min_rev_len = min_rev_len
+        self.max_rev_len = max_rev_len
+        self.rnd_state = rnd_state
+        self.data_name = (f'{self.__class__.__name__}'
+                          f'__mn_ur({self.min_user_ratings})'
+                          f'__mn_pv({self.min_product_reviews})'
+                          f'__require_pd({self.require_product_description})')
 
-    def get_train(self):
-        return self.get_dataset(load_cache=True)['train']
+    def get_test(self, load_cache=True, save_cache=True):
+        return self.get_dataset(load_cache=load_cache, save_cache=save_cache)['test']
 
-    def get_test(self):
-        return self.get_dataset(load_cache=True)['test']
+    def get_val(self, load_cache=True, save_cache=True):
+        return self.get_dataset(load_cache=load_cache, save_cache=save_cache)['val']
 
-    def get_dataset(self, load_cache=True, save_cache=True):
+    def get_train(self, load_cache=True, save_cache=True):
+        return self.get_dataset(load_cache=load_cache, save_cache=save_cache)['train']
+
+    @staticmethod
+    def bundle_dataset(test_up_rat,  test_product_desc,  test_product_rev,
+                        val_up_rat,   val_product_desc,   val_product_rev,
+                      train_up_rat, train_product_desc, train_product_rev):
+        return {
+                'test': {'user_product_ratings': test_up_rat,
+                         'product_descriptions': test_product_desc,
+                         'product_reviews': test_product_rev},
+                'val': {'user_product_ratings': val_up_rat,
+                        'product_descriptions': val_product_desc,
+                        'product_reviews': val_product_rev},
+                'train': {'user_product_ratings': train_up_rat,
+                          'product_descriptions': train_product_desc,
+                          'product_reviews': train_product_rev}
+        }
+
+    @staticmethod
+    def hash_fn(row):
+        # return 8 bytes of row hash as integer
+        hd = hashlib.sha256(bytes(str(tuple(row)), 'utf8')).hexdigest()
+        return int(hd[:16], 16) / float(2 ** 64)
+
+    def get_dataset(self, load_cache=True, save_cache=True, verbose=False):
 
         data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                  'preprocessed_datasets', self.data_name)
-        train_path = os.path.join(data_path, 'train.p')
-        test_path  = os.path.join(data_path, 'test.p')
-        if load_cache and os.path.isfile(train_path) \
-                      and os.path.isfile(test_path):
-            return {'train': pickle.load(open(train_path, 'rb')),
-                    'test': pickle.load(open(test_path, 'rb'))}
+
+        test_up_rat_path = os.path.join(data_path, 'test.user_product_ratings.feather')
+        test_product_desc_path = os.path.join(data_path, 'test.product_descriptions.feather')
+        test_product_rev_path = os.path.join(data_path, 'test.product_reviews.feather')
+        val_up_rat_path = os.path.join(data_path, 'val.user_product_ratings.feather')
+        val_product_desc_path = os.path.join(data_path, 'val.product_descriptions.feather')
+        val_product_rev_path = os.path.join(data_path, 'val.product_reviews.feather')
+        train_up_rat_path = os.path.join(data_path, 'train.user_product_ratings.feather')
+        train_product_desc_path = os.path.join(data_path, 'train.product_descriptions.feather')
+        train_product_rev_path = os.path.join(data_path, 'train.product_reviews.feather')
+
+        if load_cache and os.path.isdir(data_path):
+            if verbose:
+                print('loading preprocessed dataset from disk')
+            test_up_rat = pd.read_feather(test_up_rat_path)
+            test_product_desc = pd.read_feather(test_product_desc_path)
+            test_product_rev = pd.read_feather(test_product_rev_path)
+            val_up_rat = pd.read_feather(val_up_rat_path)
+            val_product_desc = pd.read_feather(val_product_desc_path)
+            val_product_rev = pd.read_feather(val_product_rev_path)
+            train_up_rat = pd.read_feather(train_up_rat_path)
+            train_product_desc = pd.read_feather(train_product_desc_path)
+            train_product_rev = pd.read_feather(train_product_rev_path)
+            return DataSource.bundle_dataset(test_up_rat,  test_product_desc,  test_product_rev,
+                                              val_up_rat,   val_product_desc,   val_product_rev,
+                                            train_up_rat, train_product_desc, train_product_rev)
 
         # load data from sub-class implementations
+        if verbose:
+            print('loading raw data')
         up_rat = self._raw_user_product_ratings()
-        p_desc = self._raw_product_descriptions()
-        up_rev = self._raw_user_product_reviews()
+        product_desc = self._raw_product_descriptions()
+        product_rev = self._raw_product_reviews()
 
-        products = (set(up_rat.product_id) | 
-                    set(p_desc.product_id) |
-                    set(up_rev.product_id))
-        users = set(up_rat.user_id) | set(up_rev.user_id)
-
-        ######################################
-        #### Process user-product ratings ####
-        ######################################
         assert set(up_rat.columns) == {'user_id', 'product_id', 'rating'}
-        up_rat.drop_duplicates(inplace=True)
+        assert set(product_desc.columns) == {'product_id', 'description'}
+        assert set(product_rev.columns) == {'product_id', 'review'}
 
-        # IMPORTANT: the TRAIN/TEST split is determined by the hash value
-        # of each (user_id, product_id, rating). This ensures that 
-        def hash_fn(row):
-            # return 8 bytes of row hash as integer
-            hd = hashlib.sha256(bytes(str(tuple(row)), 'utf8')).hexdigest()
-            return int(hd[:16], 16)
-        up_rat['hash'] = up_rat.apply(hash_fn, axis=1)
-        up_rat.sort_values('hash', inplace=True)
+        
+        # a bit of cleaning of description/review string lengths
+        if verbose:
+            print('cleaning review lenghts')
+        pd_lens = product_desc.description.apply(len)
+        product_desc = product_desc[(pd_lens >= self.min_desc_len) &
+                                    (pd_lens <= self.max_desc_len)]
+        rv_lens = product_rev.review.apply(len)
+        product_rev = product_rev[(rv_lens >= self.min_rev_len) &
+                                  (rv_lens <= self.max_rev_len)]
 
-        # convert raw user(s) and product(s) to a contiguous range
-        # of integers
-        user_ids = dict(zip(sorted(users), range(len(users))))
-        product_ids = dict(zip(sorted(products), range(len(products))))
-        # update up_rat columns
-        up_rat.user_id = up_rat.user_id.apply(lambda uid: user_ids[uid])
-        up_rat.product_id = up_rat.product_id.apply(lambda pid: product_ids[pid])
+        # clean out products with no description
+        if self.require_product_description:
+            if verbose:
+                print('removing products with no description')
+            pids = set(product_desc.product_id)
+            up_rat = up_rat[up_rat.product_id.isin(pids)]
+            product_rev = product_rev[product_rev.product_id.isin(pids)]
 
-        up_rat_test  = (up_rat[up_rat.hash <= self.test_frac * (2 ** 64)]
-                        .drop('hash', axis=1))
-        up_rat_train = (up_rat[up_rat.hash > self.test_frac * (2 ** 64)]
-                        .drop('hash', axis=1))
+        # clean out products with too few reviews
+        if verbose:
+            print('removing poducts with too few reviews')
+        rev_count = (product_rev.groupby('product_id', as_index=False)['review']
+                .count().rename(columns={'review': 'review_count'}))
+        arr = rev_count.review_count >= self.min_product_reviews
+        good_products = set(rev_count[arr].product_id)
+        product_desc = product_desc[product_desc.product_id.isin(good_products)]
+        up_rat = up_rat[up_rat.product_id.isin(good_products)]
+        product_rev = product_rev[product_rev.product_id.isin(good_products)]
 
-        ######################################
-        #### Process product descriptions ####
-        ######################################
-        assert set(p_desc.columns) == {'product_id', 'description'}
-        p_desc = (p_desc.groupby('product_id').apply(
-                  lambda df: max(df.description, key=lambda s: len(s)))
-                  .to_frame().reset_index().rename(columns={0: 'description'}))
-        p_desc.product_id = p_desc.product_id.apply(lambda pid: product_ids[pid])
+        # clean out users with too few ratings
+        if verbose:
+            print('removing users with too few ratings')
+        rat_count = (up_rat.groupby('user_id', as_index=False)['rating']
+                           .count().rename(columns={'rating': 'rating_count'}))
+        arr = rat_count.rating_count >= self.min_user_ratings
+        good_users = set(rat_count[arr].user_id)
+        up_rat = up_rat[up_rat.user_id.isin(good_users)]
+        
+        # compute the raw product ids and user ids from underlying data
+        raw_products = (set(up_rat.product_id) | 
+                        set(product_desc.product_id) |
+                        set(product_rev.product_id))
 
-        ######################################
-        #### Process user-product reviews ####
-        ######################################
-        assert set(up_rev.columns) == {'user_id', 'product_id', 'review'}
-        if not up_rev.empty:
-            up_rev = (up_rev.groupby(['user_id', 'product_id']).apply(
-                      lambda df: max(df.review, key=lambda s: len(s)))
-                      .to_frame().reset_index().rename(columns={0:'review'}))
-        up_rev.user_id = up_rev.user_id.apply(lambda uid: user_ids[uid])
-        up_rev.product_id = up_rev.product_id.apply(lambda pid: product_ids[pid])
+        raw_users = set(up_rat.user_id)
 
-        merged = pd.merge(up_rev, up_rat_test, how='left',
-                          on=['user_id', 'product_id'])
-        up_rev_test = merged[merged.rating.notna()].drop('rating', axis=1)
-        up_rev_train = merged[merged.rating.isna()].drop('rating', axis=1)
+        if verbose:
+            print('compute test/validation user/product/cell holdout')
 
-        train = {'user_product_ratings': up_rat_train,
-                 'product_descriptions': p_desc,
-                 'user_product_reviews': up_rev_train}
-        test = {'user_product_ratings': up_rat_test,
-                'product_descriptions': p_desc,
-                'user_product_reviews': up_rev_test}
-        result = {'train': train, 'test': test}
+        # compute held-out users and products for test set
+        test_heldout_products = set(rp for rp in raw_products 
+                if DataSource.hash_fn((rp,)) < self.test_product_holdout)
+        test_heldout_users = set(ru for ru in raw_users
+                if DataSource.hash_fn((ru,)) < self.test_user_holdout)
+
+        # compute held-out users and products for val set
+        val_heldout_products = set(rp for rp in raw_products
+                if self.test_product_holdout \
+                        <= DataSource.hash_fn((rp,)) \
+                        <  self.test_product_holdout + \
+                           self.val_product_holdout)
+
+        val_heldout_users = set(ru for ru in raw_users
+                if self.test_user_holdout \
+                        <= DataSource.hash_fn((ru,)) \
+                        <  self.test_user_holdout + \
+                           self.val_user_holdout)
+
+        # compute random hash of each row of user-product rating matrix
+        random_hash = up_rat.apply(DataSource.hash_fn, axis=1)
+        
+        if verbose:
+            print('constructing dataset split')
+
+        # construct test set
+        test_up_rat = up_rat[up_rat.product_id.isin(test_heldout_products) |
+                             up_rat.user_id.isin(test_heldout_users) |
+                             (random_hash < self.test_cell_holdout)]
+        test_product_desc = product_desc[
+                product_desc.product_id.isin(test_up_rat.product_id)]
+        test_product_rev = product_rev[
+                product_rev.product_id.isin(test_up_rat.product_id)]
+
+        # construct validation set
+        val_up_rat = up_rat[up_rat.product_id.isin(val_heldout_products) |
+                            up_rat.user_id.isin(val_heldout_users) |
+                            ((random_hash >= self.test_cell_holdout) & 
+                             (random_hash <  (self.test_cell_holdout +
+                                              self.val_cell_holdout)))]
+        val_product_desc = product_desc[
+                product_desc.product_id.isin(val_up_rat.product_id)]
+        val_product_rev = product_rev[
+                product_rev.product_id.isin(val_up_rat.product_id)]
+
+        # construct train set
+        train_up_rat = up_rat[
+                ~up_rat.product_id.isin(test_heldout_products) &
+                ~up_rat.product_id.isin(val_heldout_products) &
+                ~up_rat.user_id.isin(test_heldout_users) &
+                ~up_rat.user_id.isin(val_heldout_users) &
+                (random_hash >= (self.test_cell_holdout +
+                                 self.val_cell_holdout))]
+        train_product_desc = product_desc[
+                product_desc.product_id.isin(train_up_rat.product_id)]
+        train_product_rev = product_rev[
+                product_rev.product_id.isin(train_up_rat.product_id)]
+
+        # relabel user and product ids to be integers, thus easy to work with
+        if verbose:
+            print('relabelling raw users/products')
+        if self.rnd_state is not None:
+            np.random.seed(234 + self.rnd_state)
+        user_id_map = dict(zip(np.random.permutation(list(raw_users)),
+                               range(len(raw_users))))
+        product_id_map = dict(zip(np.random.permutation(list(raw_products)),
+                                  range(len(raw_products))))
+        
+        pl = (lambda pid: product_id_map[pid])
+        ul = (lambda uid: user_id_map[uid])
+        pd.options.mode.chained_assignment = None
+        test_up_rat.product_id = test_up_rat.product_id.apply(pl)
+        test_up_rat.user_id = test_up_rat.user_id.apply(ul)
+        test_product_desc.product_id = test_product_desc.product_id.apply(pl)
+        test_product_rev.product_id = test_product_rev.product_id.apply(pl)
+        val_up_rat.product_id = val_up_rat.product_id.apply(pl)
+        val_up_rat.user_id = val_up_rat.user_id.apply(ul)
+        val_product_desc.product_id = val_product_desc.product_id.apply(pl)
+        val_product_rev.product_id = val_product_rev.product_id.apply(pl)
+        train_up_rat.product_id = train_up_rat.product_id.apply(pl)
+        train_up_rat.user_id = train_up_rat.user_id.apply(ul)
+        train_product_desc.product_id = train_product_desc.product_id.apply(pl)
+        train_product_rev.product_id = train_product_rev.product_id.apply(pl)
+        pd.options.mode.chained_assignment = 'warn'
+
+        test_up_rat.reset_index(drop=True, inplace=True)
+        test_product_desc.reset_index(drop=True, inplace=True)
+        test_product_rev.reset_index(drop=True, inplace=True)
+        val_up_rat.reset_index(drop=True, inplace=True)
+        val_product_desc.reset_index(drop=True, inplace=True)
+        val_product_rev.reset_index(drop=True, inplace=True)
+        train_up_rat.reset_index(drop=True, inplace=True)
+        train_product_desc.reset_index(drop=True, inplace=True)
+        train_product_rev.reset_index(drop=True, inplace=True)
 
         if save_cache:
+            if verbose:
+                print('saving dataset to disk')
             if not os.path.isdir(data_path):
                 os.makedirs(data_path)
-            if os.path.isfile(train_path):
-                os.remove(train_path)
-            if os.path.isfile(test_path):
-                os.remove(test_path)
-            pickle.dump(train, open(train_path, 'wb')) 
-            pickle.dump(test,  open(test_path, 'wb'))
+            if os.path.isfile(test_up_rat_path):
+                os.remove(test_up_rat_path)
+            if os.path.isfile(test_product_desc_path):
+                os.remove(test_product_desc_path)
+            if os.path.isfile(test_product_rev_path):
+                os.remove(test_product_rev_path)
+            if os.path.isfile(val_up_rat_path):
+                os.remove(val_up_rat_path)
+            if os.path.isfile(val_product_desc_path):
+                os.remove(val_product_desc_path)
+            if os.path.isfile(val_product_rev_path):
+                os.remove(val_product_rev_path)
+            if os.path.isfile(train_up_rat_path):
+                os.remove(train_up_rat_path)
+            if os.path.isfile(train_product_desc_path):
+                os.remove(train_product_desc_path)
+            if os.path.isfile(train_product_rev_path):
+                os.remove(train_product_rev_path)
+
+            test_up_rat.to_feather(test_up_rat_path)
+            test_product_desc.to_feather(test_product_desc_path)
+            test_product_rev.to_feather(test_product_rev_path)
+            val_up_rat.to_feather(val_up_rat_path)
+            val_product_desc.to_feather(val_product_desc_path)
+            val_product_rev.to_feather(val_product_rev_path)
+            train_up_rat.to_feather(train_up_rat_path)
+            train_product_desc.to_feather(train_product_desc_path)
+            train_product_rev.to_feather(train_product_rev_path)
             
-        return result
+        return DataSource.bundle_dataset(test_up_rat,  test_product_desc,  test_product_rev,
+                                          val_up_rat,   val_product_desc,   val_product_rev,
+                                        train_up_rat, train_product_desc, train_product_rev)
+
 
     def _raw_user_product_ratings(self):
         raise NotImplementedError
@@ -124,16 +313,15 @@ class DataSource:
     def _raw_product_descriptions(self):
         raise NotImplementedError
 
-    def _raw_user_product_reviews(self):
+    def _raw_product_reviews(self):
         raise NotImplementedError
 
 class RandomData(DataSource):
 
     def __init__(self, num_users=10, num_products=100,
                  prob_rate=0.1, prob_review=0.1,
-                 rnd_state=None):
-        DataSource.__init__(self)
-        self.rnd_state=rnd_state
+                 **kwargs):
+        DataSource.__init__(self, **kwargs)
         self.num_users = num_users
         self.num_products = num_products
         self.prob_rate = prob_rate
@@ -165,20 +353,64 @@ class RandomData(DataSource):
             data['description'][-1] = data['description'][-1][:-1]
         return pd.DataFrame(data)
 
-    def _raw_user_product_reviews(self):
+    def _raw_product_reviews(self):
         vocab = ['wow', 'how', 'such', 'much', 'awesome', 'terrible']
-        data = {'user_id': [], 'product_id': [], 'review': []}
+        data = {'product_id': [], 'review': []}
         for user_id in range(self.num_users):
             for product_id in range(self.num_products):
                 if np.random.uniform() >= self.prob_review:
                     break
-                data['user_id'].append(user_id)
                 data['product_id'].append(product_id)
                 data['review'].append(' ')
                 while np.random.uniform() < 0.8:
                     data['review'][-1] += np.random.choice(vocab) + ' '
                 data['review'][-1] = data['review'][-1][:-1]
         return pd.DataFrame(data)
+
+
+class ToyData(DataSource):
+
+    def __init__(self, **kwargs):
+        DataSource.__init__(self, **kwargs)
+
+    def _raw_user_product_ratings(self):
+        return pd.DataFrame(
+                [['A', 'V', 1.0],##
+                 ['A', 'W', 1.0],##
+                 ['A', 'Y', 1.0],##
+                 ['B', 'X', 2.0],##
+                 ['B', 'Z', 2.0],##
+                 ['C', 'V', 3.0],
+                 ['C', 'W', 3.0],#
+                 ['C', 'X', 3.0],
+                 ['C', 'Y', 3.0],#
+                 ['D', 'W', 4.0],##
+                 ['E', 'V', 5.0],
+                 ['E', 'W', 5.0],#
+                 ['E', 'X', 5.0],
+                 ['E', 'Z', 5.0]],#
+                columns = ['user_id', 'product_id', 'rating'])
+
+    def _raw_product_descriptions(self):
+        # drops Y and Z from products,
+        # this should drop A as a user
+        return pd.DataFrame(
+                [['V', 'A car that drives really fast.'],
+                 ['W', 'A book that is very boring.'],
+                 ['X', 'A food item that tastes spicy.'],
+                 ['Y', '']], # missing Z
+                columns = ['product_id', 'description'])
+
+    def _raw_product_reviews(self):
+        return pd.DataFrame(
+                [['V', 'really good'],
+                 ['V', 'okay'],
+                 ['X', 'a'],
+                 ['X', 'wow, very hot!'],
+                 ['Y', 'not too shabby'],
+                 ['Z', 'ruined my life']],
+                columns = ['product_id', 'review'])
+
 
 class MovieLensData(DataSource):
 
@@ -225,20 +457,15 @@ class MovieLensData(DataSource):
         ('tmdb_id', 'str')
     ]
 
-    def __init__(self, frac=1.0):
-        """
-          frac: the fraction of the dataset to sample.
-        """
-        DataSource.__init__(self)
-        self.frac = frac
+    def __init__(self, **kwargs):
+        DataSource.__init__(self, **kwargs)
         self.links = pd.read_csv(
             MovieLensData.links_fn,
             header=None, skiprows=[0],
             names=[t[0] for t in MovieLensData.links_columns],
             dtype=dict(MovieLensData.links_columns)
         ).drop_duplicates(subset='tmdb_id')
-        self.data_name += f'{frac:.4f}'
-    
+
     def _raw_user_product_ratings(self):
         ratings = pd.read_csv(
             MovieLensData.user_ratings_fn,
@@ -247,7 +474,7 @@ class MovieLensData(DataSource):
             dtype=dict(MovieLensData.user_ratings_columns))
         ratings.drop('timestamp', axis=1, inplace=True)
         ratings.columns = ['user_id', 'product_id', 'rating']
-        return ratings.sample(frac=self.frac)
+        return ratings
 
     def _raw_product_descriptions(self):
         movies_meta = pd.read_csv(
@@ -262,5 +489,87 @@ class MovieLensData(DataSource):
                 .rename(columns={'movie_id': 'product_id',
                                  'overview': 'description'}))
 
-    def _raw_user_product_reviews(self):
-        return pd.DataFrame([], columns=['user_id', 'product_id', 'review'])
+    def _raw_product_reviews(self):
+        return pd.DataFrame([], columns=['product_id', 'review'])
+
+class AmazonData(DataSource):
+
+    data_path = 'data/amazon/'
+    product_desc_path = os.path.join(data_path, 'descriptions.txt')
+
+    def __init__(self, **kwargs):
+        DataSource.__init__(self, **kwargs)
+        self.filen = NotImplemented
+        self.loaded = False
+
+    def _load_data(self):
+
+        # user_product_ratings and reviews
+        user_ids = []
+        product_ids = []
+        review_text = []
+        rating_value = []
+        with open(self.filen, 'r') as f:
+            for entry in f:
+                entry = json.loads(entry)
+                user_ids.append(entry['reviewerID'])
+                product_ids.append(entry['asin'])
+                review_text.append(entry['reviewText'])
+                rating_value.append(entry['overall'])
+        self.user_product_ratings = pd.DataFrame({'user_id': user_ids,
+                                                  'product_id': product_ids,
+                                                  'rating': rating_value})
+        self.user_product_reviews = pd.DataFrame({'product_id': product_ids,
+                                                  'review': review_text})
+        # product descriptions
+        productId = []
+        productDesc = []
+        pid, pdesc = None, None
+        with open(AmazonData.product_desc_path, 'r') as f:
+            for ln, line in enumerate(f):
+                if line == '\n':
+                    if pid is None or pdesc is None:
+                        print(f'Ill-defined product at line {ln}')
+                    else:
+                        productId.append(pid)
+                        productDesc.append(pdesc)
+                        pid, pdesc = None, None
+                else:
+                    m = re.match(r'^product/productId: ([0-9A-Z]+)\n$', line)
+                    if m is not None:
+                        pid = m.group(1)
+                        continue
+                    m = re.match(r'^product/description: (.*)\n$', line)
+                    if m is not None:
+                        pdesc = m.group(1)
+        Df = pd.DataFrame({'product_id': productId, 'description': productDesc})
+        # restrict products to those specified within self.filen
+        product_ids = (set(self.user_product_ratings.product_id) |
+                       set(self.user_product_reviews.product_id))
+        Df = Df[Df.product_id.isin(product_ids)]
+        # restrict length of product descriptions to 50 - 1000 characters
+        lens = Df.description.apply(len)
+        Df = Df[(lens >= 20) & (lens <= 1000)]
+        self.product_descriptions = Df
+        self.loaded = True
+
+    def _raw_user_product_ratings(self):
+        if not self.loaded:
+            self._load_data()
+        return self.user_product_ratings
+
+    def _raw_product_descriptions(self):
+        if not self.loaded:
+            self._load_data()
+        return self.product_descriptions
+
+    def _raw_product_reviews(self):
+        if not self.loaded:
+            self._load_data()
+        return self.user_product_reviews
+
+class AmazonBooks(AmazonData):
+
+    def __init__(self, **kwargs):
+        AmazonData.__init__(self, **kwargs)
+        self.filen = os.path.join(AmazonData.data_path, 'books_5_core.json')
