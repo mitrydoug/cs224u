@@ -87,9 +87,74 @@ class ItemItemCollaborationModel(RecommenderModel):
             results.append(prediction)
         return pd.Series(results, index=users_products.index)
 
+class SimpleMeanModel(RecommenderModel):
 
+    def __init__(self, **kwargs):
+        RecommenderModel.__init__(self, **kwargs)
 
+    def fit(self, data):
+        self.global_mean = data['user_product_ratings'].rating.mean()
 
+    def predict(self, users_products):
+        return pd.Series(self.global_mean, index=users_products.index)
 
+class UserMeanModel(RecommenderModel):
 
+    def __init__(self, **kwargs):
+        RecommenderModel.__init__(self, **kwargs)
+
+    def fit(self, data):
+        upr = data['user_product_ratings']
+        self.user_params = (upr.groupby('user_id')[['rating']].mean()
+                               .rename(columns={'rating': 'mean_rating'}))
+        self.global_mean = upr.rating.mean()
+
+    def predict(self, users_products):
+        up = pd.merge(users_products, self.user_params, how='left',
+                      left_on='user_id', right_index=True)
+        return up.mean_rating.fillna(self.global_mean)
+
+class ProductMeanModel(RecommenderModel):
+
+    def __init__(self, **kwargs):
+        RecommenderModel.__init__(self, **kwargs)
+
+    def fit(self, data):
+        upr = data['user_product_ratings']
+        self.product_params = (upr.groupby('product_id')[['rating']].mean()
+                                  .rename(columns={'rating': 'mean_rating'}))
+        self.global_mean = upr.rating.mean()
+
+    def predict(self, users_products):
+        up = pd.merge(users_products, self.product_params, how='left',
+                      left_on='product_id', right_index=True)
+        return up.mean_rating.fillna(self.global_mean)
+
+class CombinedMeanModel(RecommenderModel):
+
+    def __init__(self, **kwargs):
+        RecommenderModel.__init__(self, **kwargs)
+
+    def fit(self, data):
+        upr = data['user_product_ratings']
+        self.global_mean = upr.rating.mean()
+        self.global_std = upr.rating.std()
+        self.user_params = (upr.groupby('user_id')['rating']
+                               .agg(['mean', 'std']))
+        upr = pd.merge(upr, self.user_params, how='left',
+                       left_on='user_id', right_index=True)
+        upr['normed'] = ((upr.rating - upr['mean']) / 
+                         upr['std'].where(upr['std'] > 0., 1.))
+        self.film_params = upr.groupby('product_id')[['normed']].mean()
+
+    def predict(self, users_products):
+        up = users_products.copy()
+        up = pd.merge(up, self.user_params, how='left',
+                      left_on='user_id', right_index=True)
+        up = pd.merge(up, self.film_params, how='left',
+                      left_on='product_id', right_index=True)
+        up['mean'].fillna(self.global_mean, inplace=True)
+        up['std'].fillna(self.global_std, inplace=True)
+        up['normed'].fillna(0., inplace=True)
+        return up['mean'] + up['normed'] * up['std']
 
