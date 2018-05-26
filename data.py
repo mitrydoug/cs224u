@@ -10,6 +10,7 @@ import re
 class DataSource:
 
     def __init__(self, min_user_ratings=5,
+                       max_user_ratings=200,
                        min_product_reviews=1,
                        require_product_description=True,
                        min_desc_len=10,
@@ -39,6 +40,7 @@ class DataSource:
         self.val_product_holdout = 0.1
         ###########################################
         self.min_user_ratings = min_user_ratings
+        self.max_user_ratings = max_user_ratings
         self.min_product_reviews = min_product_reviews
         self.require_product_description = True
         self.min_desc_len = min_desc_len
@@ -48,6 +50,7 @@ class DataSource:
         self.rnd_state = rnd_state
         self.data_name = (f'{self.__class__.__name__}'
                           f'__mn_ur.{self.min_user_ratings}'
+                          f'__mx_ur.{self.max_user_ratings}'
                           f'__mn_pv.{self.min_product_reviews}'
                           f'__require_pd.{self.require_product_description}')
 
@@ -156,10 +159,11 @@ class DataSource:
 
         # clean out users with too few ratings
         if verbose:
-            print('removing users with too few ratings')
+            print('removing users with too few (or too many) ratings')
         rat_count = (up_rat.groupby('user_id', as_index=False)['rating']
                            .count().rename(columns={'rating': 'rating_count'}))
-        arr = rat_count.rating_count >= self.min_user_ratings
+        arr = ((rat_count.rating_count >= self.min_user_ratings) &
+               (rat_count.rating_count <= self.max_user_ratings))
         good_users = set(rat_count[arr].user_id)
         up_rat = up_rat[up_rat.user_id.isin(good_users)]
         
@@ -457,6 +461,8 @@ class MovieLensData(DataSource):
         ('tmdb_id', 'str')
     ]
 
+    reviews_fn = 'data/movielens/reviews.csv'
+
     def __init__(self, **kwargs):
         DataSource.__init__(self, **kwargs)
         self.links = pd.read_csv(
@@ -464,7 +470,8 @@ class MovieLensData(DataSource):
             header=None, skiprows=[0],
             names=[t[0] for t in MovieLensData.links_columns],
             dtype=dict(MovieLensData.links_columns)
-        ).drop_duplicates(subset='tmdb_id')
+        )
+        self.links.imdb_id = self.links.imdb_id.apply(lambda s: f'tt{s}')
 
     def _raw_user_product_ratings(self):
         ratings = pd.read_csv(
@@ -484,13 +491,14 @@ class MovieLensData(DataSource):
             dtype=dict(MovieLensData.movies_meta_columns)
         ).drop_duplicates(subset='tmdb_id')
         movies_meta.overview.fillna('', inplace=True)
-        merged = movies_meta.merge(self.links, how='left', on='tmdb_id')
+        merged = movies_meta.merge(self.links, how='left', on='imdb_id')
         return (merged[['movie_id', 'overview']]
                 .rename(columns={'movie_id': 'product_id',
                                  'overview': 'description'}))
 
     def _raw_product_reviews(self):
-        return pd.DataFrame([], columns=['product_id', 'review'])
+        return pd.read_csv(MovieLensData.reviews_fn,
+                dtype={'product_id': 'str', 'review': 'str'})
 
 class AmazonData(DataSource):
 
