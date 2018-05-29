@@ -4,6 +4,7 @@ from sklearn.neighbors import NearestNeighbors
 from scipy.sparse import csr_matrix
 import scipy    
 import queue as Q
+from collections import defaultdict
 
 
 class RecommenderModel:
@@ -59,72 +60,52 @@ class ItemItemCollaborationModel(RecommenderModel):
         ru_bar = u['rating'].mean()
         numerator = np.sum( (s1['rating_x'] - ra_bar) *  (s1['rating_y'] - ru_bar))
         denom = np.sqrt(np.sum((s1['rating_x'] - ra_bar)**2) * np.sum((s1['rating_y'] - ru_bar)**2))
-        if numerator == 0:
+        if denom == 0:
             return 0
         Pau = numerator / denom
         return Pau
      
-    def intersection(lst1, lst2):
-        return list(set(lst1) & set(lst2))   
-
     def fit(self, data):
         self.user_product_ratings = data['user_product_ratings']
 
         # step 1: map from movie --> all users that rate that movie
-        self.product_user_dict = {}
-        for x in range(len(self.user_product_ratings)):
-            currentid = self.user_product_ratings.iloc[x,0]
-            currentvalue = self.user_product_ratings.iloc[x,2]
-            self.product_user_dict.setdefault(currentid, [])
-            self.product_user_dict[currentid].append(currentvalue)
-
+        self.product_user_dict = defaultdict(list)
+        for index, row in self.user_product_ratings.iterrows():
+            user_id = row['user_id']
+            product_id = row['product_id']
+            self.product_user_dict[product_id].append(user_id)
 
         # step 2: for every user, collect mean rating
-        self.mean_rating = self.user_product_ratings.groupby(['user_id'])['rating'].mean()
+        self.user_mean_rating = self.user_product_ratings.groupby(['user_id'])['rating'].mean()
+        self.product_mean_rating = self.user_product_ratings.groupby(['product_id'])['rating'].mean()
+        self.global_mean_rating = self.user_product_ratings['rating'].mean()
+     
+    def collab_user_product(self, user, product, num_neighbors=5): 
+        user_present = user in self.user_mean_rating.index
+        product_present = product in self.product_mean_rating.index
+        if not user_present and product_present:
+            return self.product_mean_rating[product]
+        if not product_present and user_present:
+            return self.user_mean_rating[user]
+        if not user_present and not product_present:
+            return self.global_mean_rating
 
-
-        # Old implementation: item item cf with nearest neighbors
-        # def subtract_mean(Df):
-        #     Df.rating -= Df.rating.mean()
-        #     return Df
-        # self.user_product_ratings = self.user_product_ratings.groupby('user_id').apply(subtract_mean)
-        # rating_counts = self.user_product_ratings.groupby('user_id', as_index=False).count()
-        # self.sampled_users = list(rating_counts[rating_counts.rating > 1].user_id.sample(n=self.num_sampled_users))
-        # users_map = dict(zip(self.sampled_users, np.arange(self.num_sampled_users)))
-        # sparse_table = self.user_product_ratings[self.user_product_ratings.user_id.isin(self.sampled_users)]
-        # mapped_user_id_list = [users_map[k] for k in list(sparse_table.user_id)]
-        # self.sampled_user_product_matrix = csr_matrix(
-        #     (sparse_table.rating, (sparse_table.product_id, mapped_user_id_list))).todense()
-        # self.neighbors = NearestNeighbors(n_neighbors=self.num_neighbors, metric='cosine').fit(self.sampled_user_product_matrix) 
-
-
-    def predict_user_product(self, user, product):
         users = self.product_user_dict[product]
         user_pqueue = Q.PriorityQueue()
         for u in users:
-            user_pqueue.put((pearson_corr(user, u), u))
+            user_pqueue.put((self.pearson_corr(user, u), u))
+        user_avg = self.user_mean_rating[user]
         
         sum_pearson = 0
-        for i in range(5): #TODO: tune this hyperparameter
-            sum_pearson += user_pqueue.get()
-
-     
-    def test_collab(self, user, product, upr): 
-        users = mydict[product]
-        user_pqueue = Q.PriorityQueue()
-        for u in users:
-            user_pqueue.put((pearson_corr(user, u, upr), u))
-        user_avg = test[(test.user_id == user)]['rating'].mean()
-        sum_pearson = 0
         weighted_score = 0
-        for i in range(min(n, user_pqueue.qsize())): # TODO: tune this hyperparameter
+        for i in range(min(num_neighbors, user_pqueue.qsize())): # TODO: tune this hyperparameter
             neighbor = user_pqueue.get()
             pearson = neighbor[0]
             neighbor_usr = neighbor[1]
             sum_pearson += pearson
-            neighbor_rating = upr[(upr.user_id == neighbor_usr)][(upr.product_id == product)].get('rating')
-            if not neighbor_rating.empty:
-                weighted_score += (neighbor_rating.iloc[0] - user_avg) * (pearson)
+            neighbor_rating = (self.user_product_ratings[(self.user_product_ratings.user_id == neighbor_usr)]
+                                                        [(self.user_product_ratings.product_id == product)].get('rating'))
+            weighted_score += (neighbor_rating.iloc[0] - self.user_mean_rating[neighbor_usr]) * (pearson)
         if sum_pearson == 0:
             new_score = user_avg
         else:
@@ -133,36 +114,11 @@ class ItemItemCollaborationModel(RecommenderModel):
 
     def predict(self, users_products, item_item=True):
         results = []
-
-        error = []
-        accuracy = 0
-        for index, row in user_products.iterrows():
+        for index, row in users_products.iterrows():
             user_id = row['user_id']
             product_id = row['product_id']
             
-            collab = test_collab(user_id, product_id, train)
-            actual = user_products[(user_products.user_id == user_id)][(user_products.product_id == product_id)].get('rating').iloc[0]
-            error.append(collab - actual)
+            collab = self.collab_user_product(user_id, product_id)
             results.append(collab)
-            if(np.round(collab) == np.round(actual)):
-                accuracy += 1
-
-
-        # Given user_id, product_id
-        # Collect all users for a product rating
-        # results = []
-        # for index, row in users_products.iterrows():
-        #     user_id = row['user_id']
-        #     products_rated = self.user_product_ratings[self.user_product_ratings.user_id == user_id]
-        #     product_id = row['product_id']
-        #     products_rated['product_sim'] = products_rated.product_id.apply(lambda pid: self.cosine_sim(product_id, pid))
-        #     sim_sum = products_rated.product_sim.sum()
-        #     if sim_sum == 0:
-        #         prediction = products_rated.rating.mean()
-        #     else:
-        #         prediction = (products_rated.product_sim * products_rated.rating).sum() / sim_sum
-        #     results.append(prediction)
         return pd.Series(results, index=users_products.index)
-
-
 
