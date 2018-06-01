@@ -42,7 +42,7 @@ class DataSource:
         self.min_user_ratings = min_user_ratings
         self.max_user_ratings = max_user_ratings
         self.min_product_reviews = min_product_reviews
-        self.require_product_description = True
+        self.require_product_description = require_product_description
         self.min_desc_len = min_desc_len
         self.max_desc_len = max_desc_len
         self.min_rev_len = min_rev_len
@@ -322,8 +322,8 @@ class DataSource:
 
 class RandomData(DataSource):
 
-    def __init__(self, num_users=10, num_products=100,
-                 prob_rate=0.1, prob_review=0.1,
+    def __init__(self, num_users=10, num_products=1000,
+                 prob_rate=0.1, prob_review=0.5,
                  **kwargs):
         DataSource.__init__(self, **kwargs)
         self.num_users = num_users
@@ -335,8 +335,8 @@ class RandomData(DataSource):
         if self.rnd_state is not None:
             np.random.seed(self.rnd_state)
         data = np.random.choice(
-                a=[np.nan, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0],
-                p=[(1.-self.prob_rate)] + [self.prob_rate/8.] * 8,
+                a=[np.nan, 1.0, 2.0, 3.0, 4.0, 5.0],
+                p=[(1.-self.prob_rate)] + [self.prob_rate/5.] * 5,
                 size=self.num_users * self.num_products)
         users, products = zip(*itertools.product(range(self.num_users),
                                                  range(self.num_products)))
@@ -481,6 +481,7 @@ class MovieLensData(DataSource):
             dtype=dict(MovieLensData.user_ratings_columns))
         ratings.drop('timestamp', axis=1, inplace=True)
         ratings.columns = ['user_id', 'product_id', 'rating']
+        ratings.rating *= 2
         return ratings
 
     def _raw_product_descriptions(self):
@@ -500,65 +501,26 @@ class MovieLensData(DataSource):
         return pd.read_csv(MovieLensData.reviews_fn,
                 dtype={'product_id': 'str', 'review': 'str'})
 
-class AmazonData(DataSource):
+class AmazonBooks(DataSource):
 
-    data_path = 'data/amazon/'
-    product_desc_path = os.path.join(data_path, 'descriptions.txt')
+    data_path = 'data/amazonbooks/'
+    product_desc_path = os.path.join(data_path, 'descriptions.feather')
 
     def __init__(self, **kwargs):
         DataSource.__init__(self, **kwargs)
-        self.filen = NotImplemented
         self.loaded = False
 
     def _load_data(self):
-
-        # user_product_ratings and reviews
-        user_ids = []
-        product_ids = []
-        review_text = []
-        rating_value = []
-        with open(self.filen, 'r') as f:
-            for entry in f:
-                entry = json.loads(entry)
-                user_ids.append(entry['reviewerID'])
-                product_ids.append(entry['asin'])
-                review_text.append(entry['reviewText'])
-                rating_value.append(entry['overall'])
-        self.user_product_ratings = pd.DataFrame({'user_id': user_ids,
-                                                  'product_id': product_ids,
-                                                  'rating': rating_value})
-        self.user_product_reviews = pd.DataFrame({'product_id': product_ids,
-                                                  'review': review_text})
-        # product descriptions
-        productId = []
-        productDesc = []
-        pid, pdesc = None, None
-        with open(AmazonData.product_desc_path, 'r') as f:
-            for ln, line in enumerate(f):
-                if line == '\n':
-                    if pid is None or pdesc is None:
-                        print(f'Ill-defined product at line {ln}')
-                    else:
-                        productId.append(pid)
-                        productDesc.append(pdesc)
-                        pid, pdesc = None, None
-                else:
-                    m = re.match(r'^product/productId: ([0-9A-Z]+)\n$', line)
-                    if m is not None:
-                        pid = m.group(1)
-                        continue
-                    m = re.match(r'^product/description: (.*)\n$', line)
-                    if m is not None:
-                        pdesc = m.group(1)
-        Df = pd.DataFrame({'product_id': productId, 'description': productDesc})
-        # restrict products to those specified within self.filen
-        product_ids = (set(self.user_product_ratings.product_id) |
-                       set(self.user_product_reviews.product_id))
-        Df = Df[Df.product_id.isin(product_ids)]
-        # restrict length of product descriptions to 50 - 1000 characters
-        lens = Df.description.apply(len)
-        Df = Df[(lens >= 20) & (lens <= 1000)]
-        self.product_descriptions = Df
+        self.product_descriptions = pd.read_feather(AmazonBooks.product_desc_path)
+        rating_review_arr = []
+        for i in range(0, int(1e10), 1000000):
+            fn = f'{AmazonBooks.data_path}/ratings_reviews{i}.feather'
+            if not os.path.exists(fn):
+                break
+            rating_review_arr.append(pd.read_feather(fn))
+        Df = pd.concat(rating_review_arr, axis=0)
+        self.user_product_ratings = Df[['user_id', 'product_id', 'rating']]
+        self.product_reviews = Df[['product_id', 'review']]        
         self.loaded = True
 
     def _raw_user_product_ratings(self):
@@ -574,10 +536,4 @@ class AmazonData(DataSource):
     def _raw_product_reviews(self):
         if not self.loaded:
             self._load_data()
-        return self.user_product_reviews
-
-class AmazonBooks(AmazonData):
-
-    def __init__(self, **kwargs):
-        AmazonData.__init__(self, **kwargs)
-        self.filen = os.path.join(AmazonData.data_path, 'books_5_core.json')
+        return self.product_reviews
