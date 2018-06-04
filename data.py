@@ -138,6 +138,7 @@ class DataSource:
         product_rev = product_rev[(rv_lens >= self.min_rev_len) &
                                   (rv_lens <= self.max_rev_len)]
 
+
         # clean out products with no description
         if self.require_product_description:
             if verbose:
@@ -166,7 +167,7 @@ class DataSource:
                (rat_count.rating_count <= self.max_user_ratings))
         good_users = set(rat_count[arr].user_id)
         up_rat = up_rat[up_rat.user_id.isin(good_users)]
-        
+
         # compute the raw product ids and user ids from underlying data
         raw_products = (set(up_rat.product_id) | 
                         set(product_desc.product_id) |
@@ -310,7 +311,6 @@ class DataSource:
                                           val_up_rat,   val_product_desc,   val_product_rev,
                                         train_up_rat, train_product_desc, train_product_rev)
 
-
     def _raw_user_product_ratings(self):
         raise NotImplementedError
 
@@ -320,10 +320,11 @@ class DataSource:
     def _raw_product_reviews(self):
         raise NotImplementedError
 
+
 class RandomData(DataSource):
 
-    def __init__(self, num_users=10, num_products=1000,
-                 prob_rate=0.1, prob_review=0.5,
+    def __init__(self, num_users=100, num_products=2000,
+                 prob_rate=0.1, prob_review=0.1,
                  **kwargs):
         DataSource.__init__(self, **kwargs)
         self.num_users = num_users
@@ -352,7 +353,7 @@ class RandomData(DataSource):
         for product_id in range(self.num_products):
             data['product_id'].append(product_id)
             data['description'].append(' ')
-            while np.random.uniform() < 0.8:
+            while np.random.uniform() < 0.975:
                 data['description'][-1] += np.random.choice(vocab) + ' '
             data['description'][-1] = data['description'][-1][:-1]
         return pd.DataFrame(data)
@@ -363,10 +364,10 @@ class RandomData(DataSource):
         for user_id in range(self.num_users):
             for product_id in range(self.num_products):
                 if np.random.uniform() >= self.prob_review:
-                    break
+                    continue
                 data['product_id'].append(product_id)
                 data['review'].append(' ')
-                while np.random.uniform() < 0.8:
+                while np.random.uniform() < 0.975:
                     data['review'][-1] += np.random.choice(vocab) + ' '
                 data['review'][-1] = data['review'][-1][:-1]
         return pd.DataFrame(data)
