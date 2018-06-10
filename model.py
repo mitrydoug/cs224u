@@ -1,13 +1,13 @@
 from queue import PriorityQueue
 from collections import defaultdict
 import re
+
 import numpy as np
 import pandas as pd
-from sklearn.neighbors import NearestNeighbors
-from scipy.sparse import csr_matrix
-import scipy    
+# from sklearn.neighbors import NearestNeighbors
+# from scipy.sparse import csr_matrix
+# import scipy
 import queue as Q
-from collections import defaultdict
 
 import torch
 
@@ -121,7 +121,6 @@ class ItemItemCollaborationModel(RecommenderModel):
         u = self.__user_ratings.loc[[u2]] # [(self.user_product_ratings.user_id == u2)]
 
         s1 = pd.merge(a, u, how='inner', on=['product_id'])
-        #print(s1)
         ra_bar = self.user_mean_rating.loc[u1]
         ru_bar = self.user_mean_rating.loc[u2]
         numerator = ((s1.rating_x - ra_bar) *  (s1.rating_y - ru_bar)).sum()
@@ -133,15 +132,18 @@ class ItemItemCollaborationModel(RecommenderModel):
      
     def fit(self, data):
         self.user_product_ratings = data['user_product_ratings'].drop_duplicates(subset=['user_id','product_id'])
+        #self.user_product_ratings.user_id = self.user_product_ratings.user_id.astype('int')
+        #self.user_product_ratings.product_id = self.user_product_ratings.product_id.astype('int')
         self.__user_product_ratings = self.user_product_ratings.set_index(['user_id', 'product_id'])
 
         self.__user_ratings = self.user_product_ratings.set_index('user_id')
 
         # step 1: map from movie --> all users that rate that movie
         self.product_user_dict = defaultdict(list)
+        #self.__ratings = dict()
         for (user_id, product_id), _ in self.__user_product_ratings.iterrows():
             self.product_user_dict[product_id].append(user_id)
-
+            #self.__ratings[(row.user_id, row.product_id)] = row.rating
         # step 1: for every user, collect mean rating
         self.user_mean_rating = self.user_product_ratings.groupby(['user_id'])['rating'].mean()
         self.product_mean_rating = self.user_product_ratings.groupby(['product_id'])['rating'].mean()
@@ -153,26 +155,12 @@ class ItemItemCollaborationModel(RecommenderModel):
         if not user_present and product_present:
             return self.product_mean_rating.loc[product]
         if not product_present and user_present:
-            return self.user_mean_ratingi.loc[user]
+            return self.user_mean_rating.loc[user]
+        if not product_present and not user_present:
+            return self.global_mean_rating
 
-        user_pqueue = Q.PriorityQueue()
-        for u in users:
-            user_pqueue.put((self.pearson_corr(user, u), u))
-        user_avg = self.user_mean_rating[user]
-        
-        sum_pearson = 0
-        weighted_score = 0
-        for i in range(min(num_neighbors, user_pqueue.qsize())): # TODO: tune this hyperparameter
-            neighbor = user_pqueue.get()
-            pearson = neighbor[0]
-            neighbor_usr = neighbor[1]
-            sum_pearson += pearson
-            neighbor_rating = (self.user_product_ratings[(self.user_product_ratings.user_id == neighbor_usr)]
-                                                        [(self.user_product_ratings.product_id == product)].get('rating'))
-            weighted_score += (neighbor_rating.iloc[0] - self.user_mean_rating[neighbor_usr]) * (pearson)
-=======
         user_pqueue = PriorityQueue()
-        for u in users:
+        for u in self.product_user_dict[product]:
             user_pqueue.put((-self.pearson_corr(user, u), u))
         user_avg = self.user_mean_rating.loc[user]
 
@@ -183,22 +171,26 @@ class ItemItemCollaborationModel(RecommenderModel):
             pearson = -neighbor[0]
             neighbor_usr = neighbor[1]
             sum_pearson += pearson
-            neighbor_rating = self.__user_product_ratings.loc[(neighbor_usr, product)]
+            neighbor_rating = self.__user_product_ratings.loc[(neighbor_usr, product)].rating
             neighbor_mean = self.user_mean_rating.loc[neighbor_usr]
-            #print(pearson)
-            #print(neighbor_mean)
-            #print(neighbor_rating)
             weighted_score += (neighbor_rating - neighbor_mean) * pearson
-        return new_score   
+        if sum_pearson == 0.:
+            return 0.
+        return user_avg + weighted_score / sum_pearson
 
     def predict(self, users_products, item_item=True):
         results = []
+        i = 0
+        N = len(users_products)
         for index, row in users_products.iterrows():
+            if i % 1000 == 0:
+                print(f'{i}/{len(users_products)}')
             user_id = row['user_id']
             product_id = row['product_id']
             
             collab = self.collab_user_product(user_id, product_id)
             results.append(collab)
+            i += 1
         return pd.Series(results, index=users_products.index)
 
 
@@ -433,3 +425,33 @@ class LSTMReader(torch.nn.Module):
         sem_max, _ = torch.max(sem_out, dim=0)
         # print(f'sem_max: {sem_max.shape}')
         return sem_max
+
+class ClusteringModel(RecommenderModel):
+    def __init__(self, **kwargs):
+        RecommenderModel.__init__(self, **kwargs)
+        self.num_clusters = 100
+        self.user_pow = 1.0
+        self.cluster_pow = 0.5
+
+    def k_means(self):
+        counts = self.user_product_ratings.groupby('user_id')['rating'].count()
+        # counts = counts[counts.rating > ]
+
+    def fit(self, data):
+
+        def apply_mean_std(Df):
+            Df['rating_mean'] = Df.rating.mean()
+            Df['rating_std'] = np.std(list(Df.rating) + [self.global_mean])
+            return Df
+
+        self.user_product_ratings = data['user_product_ratings'].copy()
+        self.global_mean = self.user_product_ratings.rating.mean()
+        self.user_mean = self.user_product_ratings.groupby('user_id')['rating'].mean()
+        self.user_std = self.user_product_ratings.groupby('user_id')['rating'].apply(
+            lambda S: np.std(list(S) + [self.global_mean])
+        )
+        self.user_product_ratings = self.user_product_ratings.groupby('user_id').apply(apply_mean_std)
+        self.user_product_ratings.rating = (
+                (self.user_product_ratings.rating - self.user_product_ratings.rating_mean) /
+                 self.user_product_ratingss.rating_std)
+        user_clusters = self.k_means()
