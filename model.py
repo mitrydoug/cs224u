@@ -248,9 +248,7 @@ class RNNModel(RecommenderModel):
             self.revw_embed_size, self.revw_vocab_size, self.revw_sem_size,
             self.user_embed_size, num_users)
         if torch.cuda.is_available():
-            model.cuda()
-        else:
-            model.cpu()
+            model = model.cuda()
 
         utils.base_timer.start(f'using Adam optimizer with lr={self.lr}')
         optimizer = torch.optim.Adam(
