@@ -242,7 +242,7 @@ class RNNModel(RecommenderModel):
                                                   collate_fn=CombineSequences(),
                                                   drop_last=False)
 
-        num_users = data['user_product_ratings'].user_id.max()+1
+        num_users = int(data['user_product_ratings'].user_id.max()+1)
         model = NeuralModule(
             self.desc_embed_size, self.desc_vocab_size, self.desc_sem_size,
             self.revw_embed_size, self.revw_vocab_size, self.revw_sem_size,
