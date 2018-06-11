@@ -128,7 +128,7 @@ class ClusteringModel():
         l2_user = np.sqrt(np.sum(np.array([user.ratings[k]**2 for k in just_user])))
         
         USER_FACTOR = 1
-        CENTROID_FACTOR = .01
+        CENTROID_FACTOR = .05
         
         return l2_intersection + (l2_user * USER_FACTOR) +  (l2_centroid * CENTROID_FACTOR)
     
