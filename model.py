@@ -341,7 +341,7 @@ class LSTMReader(torch.nn.Module):
         self.semantic_transform = torch.nn.Sequential(
             torch.nn.Dropout(p=dropout),
             torch.nn.Linear(hidden_dim, output_dim),
-            torch.nn.ReLU(),
+            torch.nn.Sigmoid(),
         )
         self.num_directions = 1
         self.num_layers = 1
