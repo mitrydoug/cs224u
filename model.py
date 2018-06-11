@@ -11,7 +11,9 @@ import queue as Q
 
 import torch
 
+from torch_data import *
 import utils
+
 
 class RecommenderModel:
 
@@ -201,9 +203,9 @@ class RNNModel(RecommenderModel):
             revw_vocab_size=5000,
             desc_embed_size=100,
             revw_embed_size=100,
-            desc_sem_size=20,
-            revw_sem_size=20,
-            max_read_revw=10,
+            desc_sem_size=103,
+            revw_sem_size=107,
+            # max_read_revw=10,
             train_epochs=10,
             train_batch_size=32,
             learning_rate=1e-2,
@@ -216,7 +218,7 @@ class RNNModel(RecommenderModel):
         self.revw_embed_size = revw_embed_size
         self.desc_sem_size = desc_sem_size
         self.revw_sem_size = revw_sem_size
-        self.max_read_revw = max_read_revw
+        # self.max_read_revw = max_read_revw
         self.train_epochs = train_epochs
         self.train_batch_size = train_batch_size
         self.lr = learning_rate
@@ -225,68 +227,6 @@ class RNNModel(RecommenderModel):
         # we add one for the bias term of a linear classifier
         self.user_embed_size = self.desc_sem_size + self.revw_sem_size + 1
 
-    def _clean_descs_and_reviews(self):
-        
-        def clean_text(text):
-            text = text.lower()
-            text = re.sub('[^a-z0-9., ]', '', text)
-            text = re.sub('\.', ' . ', text)
-            text = re.sub(',', ' , ', text)
-            text = ' ' + text + ' '
-            return text
-
-        self.product_descriptions.description = (
-                self.product_descriptions.description.apply(clean_text))
-        self.product_reviews.review = (
-                self.product_reviews.review.apply(clean_text))
-
-    def _vocab_for_series(self, texts, top_n, special_tokens):
-        counts = defaultdict(int)
-        for text in texts:
-            for match in re.findall(r' *([a-z0-9.,]+) +', text):
-                counts[match] += 1
-        vocab = (
-            list(map(lambda t: t[1],
-                sorted(((counts[w], w) for w in counts),
-                       reverse=True)[:top_n]))
-            + special_tokens)
-        vocab_to_idx = {w: i for i, w in enumerate(vocab)}
-        idx_to_vocab = {i: w for i, w in enumerate(vocab)}
-        return vocab_to_idx, idx_to_vocab
-
-    def _build_vocab(self):
-        (self.desc_vocab_to_idx,
-         self.desc_idx_to_vocab) = self._vocab_for_series(
-                self.product_descriptions.description,
-                self.desc_vocab_size, ['<UNK>'])
-
-        (self.revw_vocab_to_idx,
-         self.revw_idx_to_vocab) = self._vocab_for_series(
-                self.product_reviews.review,
-                self.revw_vocab_size, ['<UNK>'])
-
-    def _build_desc_revw_sequences(self):
-        self.product_to_desc_seq = defaultdict(list)
-        for _, row in self.product_descriptions.iterrows():
-            pid = row['product_id']
-            desc = []
-            for match in re.findall(r' *([a-z0-9.,]+) +', row['description']):
-                if match in self.desc_vocab_to_idx:
-                    desc.append(self.desc_vocab_to_idx[match])
-                else:
-                    desc.append(self.desc_vocab_to_idx['<UNK>'])
-            self.product_to_desc_seq[pid] = torch.tensor(desc, dtype=torch.long)
-        self.product_to_revw_seq = defaultdict(list)
-        for _, row in self.product_reviews.iterrows():
-            pid = row['product_id']
-            revw = []
-            for match in re.findall(r' *([a-z0-9.,]+) +', row['review']):
-                if match in self.revw_vocab_to_idx:
-                    revw.append(self.revw_vocab_to_idx[match])
-                else:
-                    revw.append(self.revw_vocab_to_idx['<UNK>'])
-            self.product_to_revw_seq[pid].append(torch.tensor(revw, dtype=torch.long))
-
     # def _init_vocab_embeddings(self):
     #     std = 1e-4
     #     self.desc_embed = torch.randn(self.desc_vocab_size, self.desc_embed_size, requires_grad=True) * std
@@ -294,94 +234,93 @@ class RNNModel(RecommenderModel):
 
     def fit(self, data):
 
-        timer = utils.TaskTimer()
+        dataset = UserProductRatingsDataset(data, self.desc_vocab_size, self.revw_vocab_size,
+                transform=ReviewSampler())
+        data_loader = torch.utils.data.DataLoader(dataset, batch_size=self.train_batch_size,
+                                                  shuffle=True, num_workers=8,
+                                                  pin_memory=torch.cuda.is_available(),
+                                                  collate_fn=CombineSequences(),
+                                                  drop_last=False)
 
-        # store data
-        timer.start('copying required data')
-        self.raw_product_descriptions = data['product_descriptions']
-        self.raw_product_reviews = data['product_reviews']
-        self.user_product_ratings = data['user_product_ratings']
-        self.product_descriptions = data['product_descriptions'].copy()
-        self.product_reviews = data['product_reviews'].copy()
+        num_users = int(data['user_product_ratings'].user_id.max()+1)
+        model = NeuralModule(
+            self.desc_embed_size, self.desc_vocab_size, self.desc_sem_size,
+            self.revw_embed_size, self.revw_vocab_size, self.revw_sem_size,
+            self.user_embed_size, num_users)
+        if torch.cuda.is_available():
+            model = model.cuda()
 
-        timer.start('cleaning product descriptions and reviews')
-        self._clean_descs_and_reviews()
-        timer.start('building product descriptions and review vocabs')
-        self._build_vocab()
-        timer.start('building product description and review index sequence')
-        self._build_desc_revw_sequences()
-
-        timer.start('initializing description reader')
-        self.desc_reader = LSTMReader(self.desc_embed_size,
-                                      len(self.desc_vocab_to_idx),
-                                      self.desc_sem_size)
-
-        timer.start('initializing review reader')
-        self.revw_reader = LSTMReader(self.revw_embed_size,
-                                      len(self.revw_vocab_to_idx),
-                                      self.revw_sem_size)
-
-        timer.start('initializing user embeddings')
-        num_users = int(self.user_product_ratings.user_id.max())+1
-        self.user_embeds = torch.nn.Embedding(num_users, self.user_embed_size, sparse=True)
-
-        timer.start(f'using Adam optimizer with lr={self.lr}')
+        utils.base_timer.start(f'using Adam optimizer with lr={self.lr}')
         optimizer = torch.optim.Adam(
-            list(param for name, param in self.desc_reader.named_parameters() if 'word_embeddings' not in name) +
-            list(param for name, param in self.revw_reader.named_parameters() if 'word_embeddings' not in name),
+            list(param for name, param in model.named_parameters() if 'embeddings' not in name),
             lr=self.lr)
-        timer.start(f'using SparseAdam optimizer with lr={self.lr}')
+        utils.base_timer.start(f'using SparseAdam optimizer with lr={self.lr}')
         embed_optimizer = torch.optim.SparseAdam(
-            list(self.desc_reader.word_embeddings.parameters()) +
-            list(self.revw_reader.word_embeddings.parameters()) +
-            list(self.user_embeds.parameters()),
+            list(param for name, param in model.named_parameters() if 'embedding' in name),
             lr=self.lr)
-        timer.stop()
+        utils.base_timer.stop()
 
         for epoch in range(self.train_epochs):
-            self.user_product_ratings = self.user_product_ratings.sample(frac=1.0)
             print(f'beginning epoch: {epoch}')
-            for idx in range(0, len(self.user_product_ratings), self.train_batch_size):
-                batch = self.user_product_ratings.iloc[idx:idx+self.train_batch_size]
-                #with torch.autograd.profiler.profile() as prof:
-                loss = 0
-                # print('forward')
-                for _, row in batch.iterrows():
-                    # print(len(self.product_to_desc_seq[row.product_id]))
-                    # print(len(self.product_to_revw_seq[row.product_id]))
-                    desc_seq = self.product_to_desc_seq[row.product_id]
-                    #print(f'desc_seq: {desc_seq.shape}')
-                    desc_sem = self.desc_reader(desc_seq)
-                    # print(f'desc_sem: {desc_sem.shape}')
-                    revw_idxs = np.random.choice(len(self.product_to_revw_seq[row.product_id]),
-                            size=min(self.max_read_revw, len(self.product_to_revw_seq[row.product_id])),
-                            replace=False)
-                    revw_sems = torch.stack(
-                            tuple(self.revw_reader(self.product_to_revw_seq[row.product_id][idx])
-                                  for idx in revw_idxs), dim=1)
-                    # print(f'revw_sems: {revw_sems.shape}')
-                    revw_sem, _ = torch.max(revw_sems, dim=1)
-                    # print(f'revw_sem: {revw_sem.shape}')
+            for i_batch, (user_ids, ratings, product_desc, product_desc_lens, product_desc_idxs,
+                                             product_revw, product_revw_lens, product_revw_idxs) \
+                    in enumerate(data_loader):
 
-                    sem_total = torch.cat((desc_sem, revw_sem, torch.ones(1)))
+                if torch.cuda.is_available():
+                    user_ids = user_ids.cuda(non_blocking=True)
+                    ratings = ratings.cuda(non_blocking=True)
+                    product_desc = product_desc.cuda(non_blocking=True)
+                    product_desc_lens = product_desc_lens.cuda(non_blocking=True)
+                    product_desc_idxs = product_desc_idxs.cuda(non_blocking=True)
+                    product_revw = product_revw.cuda(non_blocking=True)
+                    product_revw_lens = product_revw_lens.cuda(non_blocking=True)
+                    product_revw_idxs = product_revw_idxs.cuda(non_blocking=True)
 
-                    user_embed = self.user_embeds(torch.tensor(int(row.user_id), dtype=torch.long))
-                    # print(f'user_embed: {user_embed}')
-                    pred = (sem_total * user_embed).sum()
-                    # print(f'pred: {pred}, rating: {row.rating}')
-                    loss += (pred - row.rating) ** 2. / self.train_batch_size
-                print(f'batch loss: {loss}')
+                preds = model(user_ids, product_desc, product_desc_lens, product_desc_idxs,
+                                       product_revw, product_revw_lens, product_revw_idxs)
+                loss = torch.nn.functional.mse_loss(preds, ratings)
                 loss.backward()
-                # print('step')
                 optimizer.step()
                 embed_optimizer.step()
                 optimizer.zero_grad()
                 embed_optimizer.zero_grad()
-
-                #print(prof.key_averages())
+                print(f'batch loss: {loss}')
 
     def predict(self, users_products):
         pass
+
+class NeuralModule(torch.nn.Module):
+
+    def __init__(self,
+            desc_embed_size, desc_vocab_size, desc_sem_size,
+            revw_embed_size, revw_vocab_size, revw_sem_size,
+            user_embed_size, num_users
+        ):
+        super(NeuralModule, self).__init__()
+        utils.base_timer.start('initializing description reader')
+        self.desc_reader = LSTMReader(desc_embed_size, desc_vocab_size, desc_sem_size)
+
+        utils.base_timer.start('initializing review reader')
+        self.revw_reader = LSTMReader(revw_embed_size, revw_vocab_size, revw_sem_size)
+
+        utils.base_timer.start('initializing user embeddings')
+        self.user_embeddings = torch.nn.Embedding(num_users, user_embed_size, sparse=True)
+        utils.base_timer.stop()
+
+    def forward(self, user_ids, product_desc, product_desc_lens, product_desc_idxs,
+                                product_revw, product_revw_lens, product_revw_idxs):
+
+        product_desc_sem = self.desc_reader(product_desc, product_desc_lens).index_select(
+                dim=0, index=product_desc_idxs)
+        product_revw_sem = self.revw_reader(product_revw, product_revw_lens).index_select(
+                dim=0, index=product_revw_idxs)
+        product_sem = torch.cat((product_desc_sem, product_revw_sem,
+                                 torch.ones(user_ids.shape[0], 1,
+                                            device='cuda' if torch.cuda.is_available() else 'cpu')),
+                                dim=1)
+        user_embeddings = self.user_embeddings(user_ids)
+        preds = (user_embeddings * product_sem).sum(dim=1)
+        return preds
 
 
 class SemanticTransform(torch.nn.Module):
@@ -396,32 +335,38 @@ class SemanticTransform(torch.nn.Module):
 
 class LSTMReader(torch.nn.Module):
 
-    def __init__(self, embedding_dim, vocab_size, output_dim, hidden_dim=100):
+    def __init__(self, embedding_dim, vocab_size, output_dim, hidden_dim=205):
         super(LSTMReader, self).__init__()
         self.word_embeddings = torch.nn.Embedding(vocab_size, embedding_dim, sparse=True)
-        self.lstm = torch.nn.LSTM(embedding_dim, hidden_dim)
+        self.lstm = torch.nn.LSTM(embedding_dim, hidden_dim, batch_first=True)
         self.semantic_transform = SemanticTransform(hidden_dim, output_dim)
-        num_directions = 1
-        num_layers = 1
+        self.num_directions = 1
+        self.num_layers = 1
         self.h0 = torch.nn.Parameter(
-                torch.zeros(num_directions * num_layers, 1, hidden_dim,
-                            requires_grad=True))
+                torch.zeros(self.num_directions * self.num_layers,
+                            1, hidden_dim, requires_grad=True))
         self.c0 = torch.nn.Parameter(
-            torch.zeros(num_directions * num_layers, 1, hidden_dim,
-                        requires_grad=True))
+            torch.zeros(self.num_directions * self.num_layers,
+                        1, hidden_dim, requires_grad=True))
 
-    def forward(self, sentence):
+    def forward(self, sequences, lengths):
         """
         :param batch_sentences: token indices, have dimension (sequence_length)
         :return:
         """
-        # print(f'batch_sentences: {sentence.shape}')
-        embeds = self.word_embeddings(sentence)
-        # print(f'embeds: {embeds.shape}')
-        lstm_out, _ = self.lstm(embeds.view(len(sentence), 1, -1), (self.h0, self.c0))
-        # print(f'lstm_out: {lstm_out.shape}')
-        sem_out = self.semantic_transform(lstm_out.view(len(sentence), -1))
-        # print(f'sem_out: {sem_out.shape}')
-        sem_max, _ = torch.max(sem_out, dim=0)
-        # print(f'sem_max: {sem_max.shape}')
+        #print(f'batch_sentences: {sequences.shape}')
+        embeds = self.word_embeddings(sequences)
+        #print(f'embeds: {embeds.shape}')
+        packed = torch.nn.utils.rnn.pack_padded_sequence(embeds, lengths, batch_first=True)
+        h0 = self.h0.repeat(1, sequences.shape[0], 1)
+        c0 = self.c0.repeat(1, sequences.shape[0], 1)
+        lstm_out, _ = self.lstm(packed, (h0, c0))
+        lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first=True,
+                                                             padding_value=1e-8)
+        mask, _ = torch.gt(lstm_out, 1e-7).max(dim=2, keepdim=True)
+        #print(f'lstm_out: {lstm_out.shape}')
+        sem_out = self.semantic_transform(lstm_out) * mask.float()
+        #print(f'sem_out: {sem_out.shape}')
+        sem_max, _ = torch.max(sem_out, dim=1)
+        #print(f'sem_max: {sem_max.shape}')
         return sem_max

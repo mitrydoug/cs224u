@@ -3,6 +3,7 @@ import os
 import time
 
 import pandas as pd
+import torch
 
 class TaskTimer:
     def __init__(self):
@@ -25,6 +26,7 @@ class TaskTimer:
         ellapsed_millis = time.time()*1000.0 - self.start_millis
         self.active = False
         print(f'done! ({ellapsed_millis:.1f} ms)')
+base_timer = TaskTimer()
 
 def load_glove(glove_data_file):
     words = pd.read_table(glove_data_file, sep=" ", index_col=0, header=None, quoting=csv.QUOTE_NONE)
