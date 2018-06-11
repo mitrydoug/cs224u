@@ -269,14 +269,14 @@ class RNNModel(RecommenderModel):
                     in enumerate(data_loader):
 
                 if torch.cuda.is_available():
-                    user_ids.cuda(non_blocking=True)
-                    ratings.cuda(non_blocking=True)
-                    product_desc.cuda(non_blocking=True)
-                    product_desc_lens.cuda(non_blocking=True)
-                    product_desc_idxs.cuda(non_blocking=True)
-                    product_revw.cuda(non_blocking=True)
-                    product_revw_lens.cuda(non_blocking=True)
-                    product_revw_idxs.cuda(non_blocking=True)
+                    user_ids = user_ids.cuda(non_blocking=True)
+                    ratings = ratings.cuda(non_blocking=True)
+                    product_desc = product_desc.cuda(non_blocking=True)
+                    product_desc_lens = product_desc_lens.cuda(non_blocking=True)
+                    product_desc_idxs = product_desc_idxs.cuda(non_blocking=True)
+                    product_revw = product_revw.cuda(non_blocking=True)
+                    product_revw_lens = product_desc_lens.cuda(non_blocking=True)
+                    product_revw_idxs - product_revw_idxs.cuda(non_blocking=True)
 
                 preds = model(user_ids, product_desc, product_desc_lens, product_desc_idxs,
                                        product_revw, product_revw_lens, product_revw_idxs)
@@ -314,7 +314,10 @@ class NeuralModule(torch.nn.Module):
 
         product_desc_sem = self.desc_reader(product_desc, product_desc_lens)
         product_revw_sem = self.revw_reader(product_revw, product_revw_lens)
-        product_sem = torch.cat((product_desc_sem, product_revw_sem, torch.ones(user_ids.shape[0], 1)), dim=1)
+        product_sem = torch.cat((product_desc_sem, product_revw_sem,
+                                 torch.ones(user_ids.shape[0], 1,
+                                            device='cuda' if torch.cuda.is_available() else 'cpu')),
+                                dim=1)
         user_embeddings = self.user_embeddings(user_ids)
         preds = (user_embeddings * product_sem).sum(dim=1)
         return preds
