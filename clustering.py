@@ -1,5 +1,6 @@
 import random
 from math import floor, inf
+import pickle
 
 import numpy as np 
 
@@ -155,6 +156,12 @@ class ClusteringModel():
         gen_rand_usr = lambda : self.users[floor(random.uniform(1, len(self.users)))]
         self.clusters = [self.centroid(c, gen_rand_usr().ratings)\
             for c in range(self.num_clusters)]
+
+    def _add_cluster_to_upr(self, upr, cluster_dict):
+        pickle_cluster = open(cluster_dict,"rb")
+        cluster_dict = pickle.load(pickle_cluster)
+        upr['clusters'] = upr.apply(lambda row: cluster_dict[row.user_id], axis=1)
+        return upr
 
     def fit(self, X):
         self._initialize_users(X)
