@@ -110,29 +110,22 @@ class ClusteringModel():
         # centroid center: dictionary where keys are a product_id  and values are associated
         # user ratings: list of ((int)product_id, (float)rating) tuples that includes all rating given by object
         
-        # for now: pearson corrolation attenuated by number of ones in common 
-        
         set_centroid = set(centroid.center.keys())
         set_user =  set(user.ratings.keys())
        
         # intersection only 
         intersection = set_centroid & set_user
                 
-        user_ratings = np.array([user.ratings[k] for k in intersection]) 
-        center = np.array([centroid.center[k] for k in intersection]) 
-
-        dif = user_ratings - center
-        l2_intersection = np.sqrt(np.dot(dif, dif)) 
+        dif = np.array([(user.ratings[k] - centroid.center[k])**2 for k in intersection]) 
+        l2_intersection = np.sqrt(np.sum(dif)) 
         
         # centroid only 
         just_centroid = set_centroid - intersection
-        just_centroid_ratings = np.array([centroid.center[k] for k in just_centroid])         
-        l2_centroid = np.sqrt(np.dot(just_centroid_ratings , just_centroid_ratings )) 
+        l2_centroid = np.sqrt(np.sum([centroid.center[k]**2 for k in just_centroid]))
 
         # user only 
         just_user = set_user - intersection
-        just_user_ratings = np.array([user.ratings[k] for k in just_user])         
-        l2_user = np.sqrt(np.dot(just_user_ratings, just_user_ratings)) 
+        l2_user = np.sqrt(np.sum(np.array([user.ratings[k]**2 for k in just_user])))
         
         USER_FACTOR = 1
         CENTROID_FACTOR = .01
@@ -143,6 +136,7 @@ class ClusteringModel():
     def _assign_all_users(self):
         # note for now, if similarity is zero to all centers
         #    keep unassigned and hope that another user will tie the two together 
+
         for u in self.users:
             min_distance = inf
             u.assigned_cluster = -1 # unassigned
@@ -156,7 +150,7 @@ class ClusteringModel():
         grouped_reviews = X['user_product_ratings'].groupby('user_id')['user_id', 'product_id', 'rating']
         group_names = grouped_reviews.groups.keys()
         self.users = [self.user(g, grouped_reviews.get_group(g)) for g in group_names]
-                    
+
     def _initialize_clusters(self):
         gen_rand_usr = lambda : self.users[floor(random.uniform(1, len(self.users)))]
         self.clusters = [self.centroid(c, gen_rand_usr().ratings)\
