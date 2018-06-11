@@ -148,7 +148,8 @@ class ClusteringModel():
             u.assigned_cluster = -1 # unassigned
             for c in self.clusters:
                 if self._distance(u,c) < min_distance:
-                    u.assigned_cluster = c
+                    u.assigned_cluster = c.centroid_id
+                    min_distance = self._distance(u,c)
                     c.add_user(u)
 
     def _initialize_users(self, X):
@@ -174,5 +175,5 @@ class ClusteringModel():
             
     # will return some kind of list or mapping between each user id and what cluster they belong to.
     # note: cluster = -1 means unassigned
-    def return_clusters():
-        pass
+    def return_clusters(self):
+        return {u.user_id: u.assigned_cluster for u in self.users}
