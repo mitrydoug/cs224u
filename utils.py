@@ -3,6 +3,7 @@ import os
 import time
 
 import pandas as pd
+import torch
 
 class TaskTimer:
     def __init__(self):
@@ -26,6 +27,8 @@ class TaskTimer:
         self.active = False
         print(f'done! ({ellapsed_millis:.1f} ms)')
 base_timer = TaskTimer()
+
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def load_glove(glove_data_file):
     words = pd.read_table(glove_data_file, sep=" ", index_col=0, header=None, quoting=csv.QUOTE_NONE)
