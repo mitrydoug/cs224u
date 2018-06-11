@@ -242,7 +242,7 @@ class RNNModel(RecommenderModel):
                                                   collate_fn=CombineSequences(),
                                                   drop_last=False)
 
-        num_users = int(data['user_product_ratings'].user_id.max()+1)
+        num_users = int(data['user_product_ratings'].user_id.max()+1), device=utils.device
         model = NeuralModule(
             self.desc_embed_size, self.desc_vocab_size, self.desc_sem_size,
             self.revw_embed_size, self.revw_vocab_size, self.revw_sem_size,
@@ -267,6 +267,17 @@ class RNNModel(RecommenderModel):
             for i_batch, (user_ids, ratings, product_desc, product_desc_lens, product_desc_idxs,
                                              product_revw, product_revw_lens, product_revw_idxs) \
                     in enumerate(data_loader):
+
+                if torch.cuda.is_available():
+                    user_ids.cuda(non_blocking=True)
+                    ratings.cuda(non_blocking=True)
+                    product_desc.cuda(non_blocking=True)
+                    product_desc_lens.cuda(non_blocking=True)
+                    product_desc_idxs.cuda(non_blocking=True)
+                    product_revw.cuda(non_blocking=True)
+                    product_revw_lens.cuda(non_blocking=True)
+                    product_revw_idxs.cuda(non_blocking=True)
+
                 preds = model(user_ids, product_desc, product_desc_lens, product_desc_idxs,
                                        product_revw, product_revw_lens, product_revw_idxs)
                 loss = torch.nn.functional.mse_loss(preds, ratings)
