@@ -203,13 +203,13 @@ class RNNModel(RecommenderModel):
             revw_vocab_size=5000,
             desc_embed_size=100,
             revw_embed_size=100,
-            desc_sem_size=103,
-            revw_sem_size=107,
-            # max_read_revw=10,
+            desc_sem_size=20,
+            revw_sem_size=20,
             train_epochs=10,
-            train_batch_size=32,
-            learning_rate=1e-2,
-            init_std=1e-3
+            train_batch_size=256,
+            learning_rate=1e-3,
+            param_l2_norm=15e-5,
+            user_l2_norm=75e-3,
         ):
         RecommenderModel.__init__(self)
         self.desc_vocab_size = desc_vocab_size
@@ -218,11 +218,11 @@ class RNNModel(RecommenderModel):
         self.revw_embed_size = revw_embed_size
         self.desc_sem_size = desc_sem_size
         self.revw_sem_size = revw_sem_size
-        # self.max_read_revw = max_read_revw
         self.train_epochs = train_epochs
         self.train_batch_size = train_batch_size
         self.lr = learning_rate
-        self.init_std = init_std
+        self.param_l2_norm = param_l2_norm
+        self.user_l2_norm = user_l2_norm
 
         # we add one for the bias term of a linear classifier
         self.user_embed_size = self.desc_sem_size + self.revw_sem_size + 1
@@ -232,17 +232,17 @@ class RNNModel(RecommenderModel):
     #     self.desc_embed = torch.randn(self.desc_vocab_size, self.desc_embed_size, requires_grad=True) * std
     #     self.revw_embed = torch.randn(self.revw_vocab_size, self.revw_embed_size, requires_grad=True) * std
 
-    def fit(self, data):
+    def fit(self, train, val):
 
-        dataset = UserProductRatingsDataset(data, self.desc_vocab_size, self.revw_vocab_size,
+        dataset = UserProductRatingsDataset(train, self.desc_vocab_size, self.revw_vocab_size,
                 transform=ReviewSampler())
         data_loader = torch.utils.data.DataLoader(dataset, batch_size=self.train_batch_size,
-                                                  shuffle=True, num_workers=8,
+                                                  shuffle=True, num_workers=16,
                                                   pin_memory=torch.cuda.is_available(),
                                                   collate_fn=CombineSequences(),
                                                   drop_last=False)
 
-        num_users = int(data['user_product_ratings'].user_id.max()+1)
+        num_users = int(train['user_product_ratings'].user_id.max()+1)
         model = NeuralModule(
             self.desc_embed_size, self.desc_vocab_size, self.desc_sem_size,
             self.revw_embed_size, self.revw_vocab_size, self.revw_sem_size,
@@ -252,8 +252,8 @@ class RNNModel(RecommenderModel):
 
         utils.base_timer.start(f'using Adam optimizer with lr={self.lr}')
         optimizer = torch.optim.Adam(
-            list(param for name, param in model.named_parameters() if 'embeddings' not in name),
-            lr=self.lr)
+            list(param for name, param in model.named_parameters() if 'embedding' not in name),
+            weight_decay=self.param_l2_norm, lr=self.lr)
         utils.base_timer.start(f'using SparseAdam optimizer with lr={self.lr}')
         embed_optimizer = torch.optim.SparseAdam(
             list(param for name, param in model.named_parameters() if 'embedding' in name),
@@ -261,7 +261,7 @@ class RNNModel(RecommenderModel):
         utils.base_timer.stop()
 
         for epoch in range(self.train_epochs):
-            print(f'beginning epoch: {epoch}')
+            print(f'epoch {epoch}')
             for i_batch, (user_ids, ratings, product_desc, product_desc_lens, product_desc_idxs,
                                              product_revw, product_revw_lens, product_revw_idxs) \
                     in enumerate(data_loader):
@@ -276,15 +276,24 @@ class RNNModel(RecommenderModel):
                     product_revw_lens = product_revw_lens.cuda(non_blocking=True)
                     product_revw_idxs = product_revw_idxs.cuda(non_blocking=True)
 
-                preds = model(user_ids, product_desc, product_desc_lens, product_desc_idxs,
-                                       product_revw, product_revw_lens, product_revw_idxs)
-                loss = torch.nn.functional.mse_loss(preds, ratings)
+                preds, user_embeds = model(
+                    user_ids, product_desc, product_desc_lens, product_desc_idxs,
+                              product_revw, product_revw_lens, product_revw_idxs)
+                loss = torch.nn.functional.mse_loss(preds, ratings, size_average=False)
+                embeds_norm = (user_embeds * user_embeds).sum()
+                loss += self.user_l2_norm * embeds_norm
                 loss.backward()
                 optimizer.step()
                 embed_optimizer.step()
                 optimizer.zero_grad()
                 embed_optimizer.zero_grad()
-                print(f'batch loss: {loss}')
+                with torch.no_grad():
+                    param_norm = 0
+                    for name, param in model.named_parameters():
+                        if 'embedding' not in name:
+                            param_norm += (param * param).sum()
+                print(f'train, batch = {i_batch:04}, loss = {loss:02.2f}, '
+                      f'user_norm = {embeds_norm:02.2f}, param_norm = {param_norm:02.2f}')
 
     def predict(self, users_products):
         pass
@@ -320,26 +329,20 @@ class NeuralModule(torch.nn.Module):
                                 dim=1)
         user_embeddings = self.user_embeddings(user_ids)
         preds = (user_embeddings * product_sem).sum(dim=1)
-        return preds
-
-
-class SemanticTransform(torch.nn.Module):
-
-    def __init__(self, input_dim, output_dim):
-        super(SemanticTransform, self).__init__()
-        self.linear = torch.nn.Linear(input_dim, output_dim)
-
-    def forward(self, xs):
-        return self.linear(xs)
+        return preds, user_embeddings
 
 
 class LSTMReader(torch.nn.Module):
 
-    def __init__(self, embedding_dim, vocab_size, output_dim, hidden_dim=205):
+    def __init__(self, embedding_dim, vocab_size, output_dim, hidden_dim=100, dropout=0.5):
         super(LSTMReader, self).__init__()
         self.word_embeddings = torch.nn.Embedding(vocab_size, embedding_dim, sparse=True)
         self.lstm = torch.nn.LSTM(embedding_dim, hidden_dim, batch_first=True)
-        self.semantic_transform = SemanticTransform(hidden_dim, output_dim)
+        self.semantic_transform = torch.nn.Sequential(
+            torch.nn.Dropout(p=dropout),
+            torch.nn.Linear(hidden_dim, output_dim),
+            torch.nn.ReLU(),
+        )
         self.num_directions = 1
         self.num_layers = 1
         self.h0 = torch.nn.Parameter(
