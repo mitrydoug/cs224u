@@ -273,7 +273,7 @@ class RNNModel(RecommenderModel):
                     product_desc_lens = product_desc_lens.cuda(non_blocking=True)
                     product_desc_idxs = product_desc_idxs.cuda(non_blocking=True)
                     product_revw = product_revw.cuda(non_blocking=True)
-                    product_revw_lens = product_desc_lens.cuda(non_blocking=True)
+                    product_revw_lens = product_revw_lens.cuda(non_blocking=True)
                     product_revw_idxs = product_revw_idxs.cuda(non_blocking=True)
 
                 preds = model(user_ids, product_desc, product_desc_lens, product_desc_idxs,
