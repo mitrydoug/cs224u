@@ -425,33 +425,3 @@ class LSTMReader(torch.nn.Module):
         sem_max, _ = torch.max(sem_out, dim=0)
         # print(f'sem_max: {sem_max.shape}')
         return sem_max
-
-class ClusteringModel(RecommenderModel):
-    def __init__(self, **kwargs):
-        RecommenderModel.__init__(self, **kwargs)
-        self.num_clusters = 100
-        self.user_pow = 1.0
-        self.cluster_pow = 0.5
-
-    def k_means(self):
-        counts = self.user_product_ratings.groupby('user_id')['rating'].count()
-        # counts = counts[counts.rating > ]
-
-    def fit(self, data):
-
-        def apply_mean_std(Df):
-            Df['rating_mean'] = Df.rating.mean()
-            Df['rating_std'] = np.std(list(Df.rating) + [self.global_mean])
-            return Df
-
-        self.user_product_ratings = data['user_product_ratings'].copy()
-        self.global_mean = self.user_product_ratings.rating.mean()
-        self.user_mean = self.user_product_ratings.groupby('user_id')['rating'].mean()
-        self.user_std = self.user_product_ratings.groupby('user_id')['rating'].apply(
-            lambda S: np.std(list(S) + [self.global_mean])
-        )
-        self.user_product_ratings = self.user_product_ratings.groupby('user_id').apply(apply_mean_std)
-        self.user_product_ratings.rating = (
-                (self.user_product_ratings.rating - self.user_product_ratings.rating_mean) /
-                 self.user_product_ratingss.rating_std)
-        user_clusters = self.k_means()
