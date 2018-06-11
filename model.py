@@ -312,8 +312,10 @@ class NeuralModule(torch.nn.Module):
     def forward(self, user_ids, product_desc, product_desc_lens, product_desc_idxs,
                                 product_revw, product_revw_lens, product_revw_idxs):
 
-        product_desc_sem = self.desc_reader(product_desc, product_desc_lens)
-        product_revw_sem = self.revw_reader(product_revw, product_revw_lens)
+        product_desc_sem = self.desc_reader(product_desc, product_desc_lens).index_select(
+                dim=0, index=product_desc_idxs)
+        product_revw_sem = self.revw_reader(product_revw, product_revw_lens).index_select(
+                dim=0, index=product_revw_idxs)
         product_sem = torch.cat((product_desc_sem, product_revw_sem,
                                  torch.ones(user_ids.shape[0], 1,
                                             device='cuda' if torch.cuda.is_available() else 'cpu')),
