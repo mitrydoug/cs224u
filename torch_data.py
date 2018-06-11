@@ -141,6 +141,8 @@ class CombineSequences(object):
         desc = torch.tensor(
                 [ds + [0] * (max_len - len(ds)) for ds in desc],
                 dtype=torch.long)
+        desc_lens = torch.tensor(desc_lens, dtype=torch.long)
+        desc_idxs = torch.tensor(desc_idxs, dtype=torch.long)
 
         revw = [item['product_revw'] for item in batch]
         revw = [(len(r), idx, r) for idx, r in enumerate(revw)]
@@ -150,6 +152,8 @@ class CombineSequences(object):
         revw = torch.tensor(
                 [rv + [0] * (max_len - len(rv)) for rv in revw],
                 dtype=torch.long)
+        revw_lens = torch.tensor(revw_lens, dtype=torch.long)
+        revw_idxs = torch.tensor(revw_idxs, dtype=torch.long)
 
         return (user_ids, ratings, desc, desc_lens, desc_idxs,
                                    revw, revw_lens, revw_idxs)
