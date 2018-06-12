@@ -434,7 +434,7 @@ class RNNModel(RecommenderModel):
                 preds, _ = self.model(
                     user_ids, product_desc, product_desc_lens, product_desc_idxs,
                     product_revw, product_revw_lens, product_revw_idxs)
-            preds_lst += preds.cpu().tolist()
+            preds_lst += preds.tolist()
         upr = val['user_product_ratings'].copy()
         upr = (upr.merge(self.user_means, how='left', left_on='user_id', right_index=True)
                   .fillna(self.global_mean))
@@ -449,6 +449,7 @@ class NeuralModule(torch.nn.Module):
             user_embed_size, num_users
         ):
         super(NeuralModule, self).__init__()
+        self.num_users = num_users+1
         utils.base_timer.start('initializing description reader')
         self.desc_reader = LSTMReader(desc_embed_size, desc_vocab_size, desc_sem_size)
 
@@ -456,7 +457,7 @@ class NeuralModule(torch.nn.Module):
         self.revw_reader = LSTMReader(revw_embed_size, revw_vocab_size, revw_sem_size)
 
         utils.base_timer.start('initializing user embeddings')
-        self.user_embeddings = torch.nn.Embedding(num_users, user_embed_size, sparse=True)
+        self.user_embeddings = torch.nn.Embedding(self.num_users, user_embed_size, sparse=True)
         utils.base_timer.stop()
 
     def forward(self, user_ids, product_desc, product_desc_lens, product_desc_idxs,
@@ -470,7 +471,7 @@ class NeuralModule(torch.nn.Module):
                                  torch.ones(user_ids.shape[0], 1,
                                             device='cuda' if torch.cuda.is_available() else 'cpu')),
                                 dim=1)
-        user_embeddings = self.user_embeddings(user_ids)
+        user_embeddings = self.user_embeddings(torch.max(user_ids, self.num_users+1))
         preds = (user_embeddings * product_sem).sum(dim=1)
         return preds, user_embeddings
 
