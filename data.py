@@ -127,6 +127,16 @@ class DataSource:
         assert set(product_desc.columns) == {'product_id', 'description'}
         assert set(product_rev.columns) == {'product_id', 'review'}
 
+        # a bit of cleaning of desc / review text
+        def clean_text(text):
+            text = text.lower()
+            text = re.sub('[^a-z0-9., ]', '', text)
+            text = re.sub('\.', ' . ', text)
+            text = re.sub(',', ' , ', text)
+            text = ' ' + text + ' '
+            return text
+        product_desc.description = product_desc.description.apply(clean_text)
+        product_rev.review = product_rev.review.apply(clean_text)
         
         # a bit of cleaning of description/review string lengths
         if verbose:
@@ -137,7 +147,6 @@ class DataSource:
         rv_lens = product_rev.review.apply(len)
         product_rev = product_rev[(rv_lens >= self.min_rev_len) &
                                   (rv_lens <= self.max_rev_len)]
-
 
         # clean out products with no description
         if self.require_product_description:

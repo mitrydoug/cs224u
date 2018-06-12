@@ -24,9 +24,6 @@ class UserProductRatingsDataset(torch.utils.data.Dataset):
         self.product_descriptions = data['product_descriptions'].copy()
         self.product_reviews = data['product_reviews'].copy()
 
-        utils.base_timer.start('cleaning product descriptions and reviews')
-        self._clean_descs_and_reviews()
-
         if vocab_data is None:
             utils.base_timer.start('building product descriptions and review vocabs')
             self._build_vocab()
@@ -37,21 +34,6 @@ class UserProductRatingsDataset(torch.utils.data.Dataset):
         utils.base_timer.start('building product description and review index sequence')
         self._build_desc_revw_sequences()
         utils.base_timer.stop()
-
-    def _clean_descs_and_reviews(self):
-        
-        def clean_text(text):
-            text = text.lower()
-            text = re.sub('[^a-z0-9., ]', '', text)
-            text = re.sub('\.', ' . ', text)
-            text = re.sub(',', ' , ', text)
-            text = ' ' + text + ' '
-            return text
-
-        self.product_descriptions.description = (
-                self.product_descriptions.description.apply(clean_text))
-        self.product_reviews.review = (
-                self.product_reviews.review.apply(clean_text))
 
     def _vocab_for_series(self, texts, top_n, special_tokens):
         counts = defaultdict(int)
