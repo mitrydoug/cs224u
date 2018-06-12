@@ -340,7 +340,6 @@ class RNNModel(RecommenderModel):
 
                 if torch.cuda.is_available():
                     user_ids = user_ids.cuda(non_blocking=True)
-                    ratings = ratings.cuda(non_blocking=True)
                     product_desc = product_desc.cuda(non_blocking=True)
                     product_desc_lens = product_desc_lens.cuda(non_blocking=True)
                     product_desc_idxs = product_desc_idxs.cuda(non_blocking=True)
