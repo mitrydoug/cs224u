@@ -471,9 +471,9 @@ class NeuralModule(torch.nn.Module):
                                  torch.ones(user_ids.shape[0], 1,
                                             device='cuda' if torch.cuda.is_available() else 'cpu')),
                                 dim=1)
-        user_embeddings = self.user_embeddings(
-            torch.max(user_ids, torch.tensor(
-                self.num_users+1, device='cuda' if torch.cuda.is_available() else 'cpu')))
+        user_embeddings = self.user_embeddings(torch.min(user_ids,
+                torch.tensor(self.num_users,
+                             device='cuda' if torch.cuda.is_available() else 'cpu')))
         preds = (user_embeddings * product_sem).sum(dim=1)
         return preds, user_embeddings
 
