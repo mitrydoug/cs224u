@@ -211,7 +211,7 @@ class RNNModel(RecommenderModel):
             desc_sem_size=20,
             revw_sem_size=20,
             train_epochs=10,
-            train_batch_size=16,
+            train_batch_size=256,
             learning_rate=1e-3,
             param_l2_norm=15e-5,
             user_l2_norm=75e-3,
