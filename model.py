@@ -1,6 +1,11 @@
+import datetime
+import logging
 from queue import PriorityQueue
 from collections import defaultdict
+import os
 import re
+import subprocess
+import sys
 
 import numpy as np
 import pandas as pd
@@ -14,6 +19,7 @@ import torch
 from torch_data import *
 import utils
 
+LOGS_DIR = 'logs'
 
 class RecommenderModel:
 
@@ -25,7 +31,6 @@ class RecommenderModel:
 
     def predict(self, users_products):
         raise NotImplementedError
-
 
 class RandomModel(RecommenderModel):
 
@@ -93,7 +98,7 @@ class CombinedMeanModel(RecommenderModel):
                                .agg(['mean', 'std']))
         upr = pd.merge(upr, self.user_params, how='left',
                        left_on='user_id', right_index=True)
-        upr['normed'] = ((upr.rating - upr['mean']) / 
+        upr['normed'] = ((upr.rating - upr['mean']) /
                          upr['std'].where(upr['std'] > 0., 1.))
         self.film_params = upr.groupby('product_id')[['normed']].mean()
 
@@ -210,6 +215,7 @@ class RNNModel(RecommenderModel):
             learning_rate=1e-3,
             param_l2_norm=15e-5,
             user_l2_norm=75e-3,
+            load_chkpt=None
         ):
         RecommenderModel.__init__(self)
         self.desc_vocab_size = desc_vocab_size
@@ -223,9 +229,33 @@ class RNNModel(RecommenderModel):
         self.lr = learning_rate
         self.param_l2_norm = param_l2_norm
         self.user_l2_norm = user_l2_norm
+        self.load_chkpt = load_chkpt
 
         # we add one for the bias term of a linear classifier
         self.user_embed_size = self.desc_sem_size + self.revw_sem_size + 1
+
+        ## logging non-sense
+        self.git_hash = subprocess.run(
+                ['git', 'log', '-n1', '--pretty=format:%h'],
+                stdout=subprocess.PIPE).stdout.decode('utf-8')
+        time = str(datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
+        self.log_dir = os.path.join(LOGS_DIR, f'model_{self.git_hash}', time)
+        self.log_file = os.path.join(self.log_dir, 'log.txt')
+        if not os.path.isdir(self.log_dir):
+            os.makedirs(self.log_dir)
+
+        self.logger = logging.getLogger('model_{self.git_hash}')
+        self.logger.propagate = False
+        self.logger.setLevel(logging.INFO)
+        fh = logging.FileHandler(self.log_file)
+        ch = logging.StreamHandler(sys.stdout)
+        fh.setLevel(logging.INFO)
+        ch.setLevel(logging.INFO)
+        formatter = logging.Formatter('%(message)s')
+        fh.setFormatter(formatter)
+        ch.setFormatter(formatter)
+        self.logger.addHandler(fh)
+        self.logger.addHandler(ch)
 
     # def _init_vocab_embeddings(self):
     #     std = 1e-4
@@ -234,34 +264,76 @@ class RNNModel(RecommenderModel):
 
     def fit(self, train, val):
 
+        user_product_ratings = train['user_product_ratings']
+        self.user_means = (user_product_ratings.groupby('user_id')['rating'].mean()
+                           .to_frame().rename(columns={'rating': 'mean'}))
+        self.global_mean = user_product_ratings.rating.mean()
+        user_product_ratings = user_product_ratings.merge(
+                self.user_means, how='left', left_on='user_id', right_index=True)
+        user_product_ratings.rating -= user_product_ratings['mean']
+        train = dict(train)
+        train['user_product_ratings'] = user_product_ratings
         dataset = UserProductRatingsDataset(train, self.desc_vocab_size, self.revw_vocab_size,
-                transform=ReviewSampler())
+                                            transform=ReviewSampler())
+        self.train_vocab_data = dataset.get_vocab_data()
         data_loader = torch.utils.data.DataLoader(dataset, batch_size=self.train_batch_size,
                                                   shuffle=True, num_workers=16,
                                                   pin_memory=torch.cuda.is_available(),
                                                   collate_fn=CombineSequences(),
                                                   drop_last=False)
 
+        # validation setup
+        val_ground_truth = val['user_product_ratings'].rating
+        _val = dict(val)
+        _val['user_product_ratings'] = _val['user_product_ratings'][['user_id', 'product_id']]
+        val_dataset = UserProductRatingsDataset(val, self.desc_vocab_size, self.revw_vocab_size,
+                                                vocab_data=self.train_vocab_data, is_val=True,
+                                                transform=ReviewSampler())
+
+
         num_users = int(train['user_product_ratings'].user_id.max()+1)
-        model = NeuralModule(
+        self.model = NeuralModule(
             self.desc_embed_size, self.desc_vocab_size, self.desc_sem_size,
             self.revw_embed_size, self.revw_vocab_size, self.revw_sem_size,
             self.user_embed_size, num_users)
+
+        if self.load_chkpt is not None:
+            chkpt = torch.load(self.load_chkpt)
+            start_epoch = ckpt['epoch']
+            self.model.load_state_dict(chkpt['model_state_dict'])
+            self.desc_vocab_size = chkpt['desc_vocab_size']
+            self.revw_vocab_size = chkpt['revw_vocab_size']
+            self.desc_embed_size = chkpt['desc_embed_size']
+            self.revw_embed_size = chkpt['revw_embed_size']
+            self.desc_sem_size = chkpt['desc_sem_size']
+            self.revw_sem_size = chkpt['revw_sem_size']
+            self.train_epochs = chkpt['train_epochs']
+            self.train_batch_size = chkpt['train_batch_size']
+            self.lr = chkpt['learning_rate']
+            self.param_l2_norm = chkpt['param_l2_norm']
+            self.user_l2_norm = chkpt['user_l2_norm']
+        else:
+            start_epoch = 0
+
         if torch.cuda.is_available():
-            model = model.cuda()
+            model = self.model.cuda()
 
         utils.base_timer.start(f'using Adam optimizer with lr={self.lr}')
         optimizer = torch.optim.Adam(
-            list(param for name, param in model.named_parameters() if 'embedding' not in name),
+            list(param for name, param in self.model.named_parameters() if 'embedding' not in name),
             weight_decay=self.param_l2_norm, lr=self.lr)
         utils.base_timer.start(f'using SparseAdam optimizer with lr={self.lr}')
         embed_optimizer = torch.optim.SparseAdam(
-            list(param for name, param in model.named_parameters() if 'embedding' in name),
+            list(param for name, param in self.model.named_parameters() if 'embedding' in name),
             lr=self.lr)
         utils.base_timer.stop()
 
-        for epoch in range(self.train_epochs):
-            print(f'epoch {epoch}')
+        best_val_acc = 0
+        train_acc = 0
+        train_mse = 0
+        alpha = 0.9
+        for epoch in range(start_epoch, self.train_epochs):
+            self.logger.info(f'epoch {epoch}')
             for i_batch, (user_ids, ratings, product_desc, product_desc_lens, product_desc_idxs,
                                              product_revw, product_revw_lens, product_revw_idxs) \
                     in enumerate(data_loader):
@@ -276,27 +348,98 @@ class RNNModel(RecommenderModel):
                     product_revw_lens = product_revw_lens.cuda(non_blocking=True)
                     product_revw_idxs = product_revw_idxs.cuda(non_blocking=True)
 
-                preds, user_embeds = model(
+                preds, user_embeds = self.model(
                     user_ids, product_desc, product_desc_lens, product_desc_idxs,
                               product_revw, product_revw_lens, product_revw_idxs)
-                loss = torch.nn.functional.mse_loss(preds, ratings, size_average=False)
+                mse = torch.nn.functional.mse_loss(preds, ratings, size_average=False)
                 embeds_norm = (user_embeds * user_embeds).sum()
-                loss += self.user_l2_norm * embeds_norm
-                loss.backward()
+                mse += self.user_l2_norm * embeds_norm
+                mse.backward()
                 optimizer.step()
                 embed_optimizer.step()
                 optimizer.zero_grad()
                 embed_optimizer.zero_grad()
                 with torch.no_grad():
                     param_norm = 0
-                    for name, param in model.named_parameters():
+                    for name, param in self.model.named_parameters():
                         if 'embedding' not in name:
                             param_norm += (param * param).sum()
-                print(f'train, batch = {i_batch:04}, loss = {loss:02.2f}, '
-                      f'user_norm = {embeds_norm:02.2f}, param_norm = {param_norm:02.2f}')
+                    ratings_np = np.round(ratings.data.numpy())
+                    preds_round = np.round(preds.data.numpy())
+                    acc = (preds_round == ratings_np).sum() / float(len(ratings))
+                    train_mse = alpha * train_mse + (1.-alpha)*mse/len(ratings)
+                    train_acc = alpha * train_acc + (1.-alpha)*acc
+                self.logger.info(f'train, '
+                                 f'batch_num = {i_batch:04}, '
+                                 f'batch_mse = {mse/len(ratings):03.2f}, '
+                                 f'batch_mun = {embeds_norm/len(ratings):03.2f}, '
+                                 f'train_mse = {train_mse:03.2f}, '
+                                 f'train_acc = {100.0*train_acc:02.2f}%, '
+                                 f'p_norm = {param_norm:03.2f}')
+            # validation test
+            with torch.no_grad():
+                val_preds = self.predict(_val, dataset=val_dataset)
+                val_mse = utils.mean_squared_error(val_preds, val_ground_truth)
+                val_acc = utils.accuracy(val_preds, val_ground_truth)
+            self.logger.info(f'test: val_mse = {val_mse:05.2f}, '
+                             f'val_acc = {100.0*val_acc:02.2f}%')
+            state = {
+                'epoch_num': epoch,
+                'model_state': self.model.state_dict(),
+                'desc_vocab_size': self.desc_vocab_size,
+                'revw_vocab_size': self.revw_vocab_size,
+                'desc_embed_size': self.desc_embed_size,
+                'revw_embed_size': self.revw_embed_size,
+                'desc_sem_size': self.desc_sem_size,
+                'revw_sem_size': self.revw_sem_size,
+                'train_epochs': self.train_epochs,
+                'train_batch_size': self.train_batch_size,
+                'learning_rate': self.lr,
+                'param_l2_norm': self.param_l2_norm,
+                'user_l2_norm': self.user_l2_norm,
+                'user_embed_size': self.user_embed_size
+            }
+            best = val_acc > best_val_acc
+            chkpt_fn = os.path.join(self.log_dir,
+                    f'model_checkpoint_epoch_{epoch}{".best" if best else ""}.pth.tar')
+            torch.save(state, chkpt_fn)
 
-    def predict(self, users_products):
-        pass
+
+    def predict(self, val, dataset=None):
+        if dataset is None:
+            dataset = UserProductRatingsDataset(val, self.desc_vocab_size, self.revw_vocab_size,
+                                                vocab_data=self.train_vocab_data, is_val=True,
+                                                transform=ReviewSampler())
+        data_loader = torch.utils.data.DataLoader(dataset, batch_size=self.train_batch_size,
+                                                  shuffle=False, num_workers=4,
+                                                  pin_memory=torch.cuda.is_available(),
+                                                  collate_fn=CombineSequences(is_val=True),
+                                                  drop_last=False)
+        preds_lst = []
+        for i_batch, (user_ids, ratings, product_desc, product_desc_lens, product_desc_idxs,
+                      product_revw, product_revw_lens, product_revw_idxs) \
+                in enumerate(data_loader):
+
+            if torch.cuda.is_available():
+                user_ids = user_ids.cuda(non_blocking=True)
+                ratings = ratings.cuda(non_blocking=True)
+                product_desc = product_desc.cuda(non_blocking=True)
+                product_desc_lens = product_desc_lens.cuda(non_blocking=True)
+                product_desc_idxs = product_desc_idxs.cuda(non_blocking=True)
+                product_revw = product_revw.cuda(non_blocking=True)
+                product_revw_lens = product_revw_lens.cuda(non_blocking=True)
+                product_revw_idxs = product_revw_idxs.cuda(non_blocking=True)
+
+            with torch.no_grad():
+                preds, _ = self.model(
+                    user_ids, product_desc, product_desc_lens, product_desc_idxs,
+                    product_revw, product_revw_lens, product_revw_idxs)
+            preds_lst += preds.tolist()
+        upr = val['user_product_ratings'].copy()
+        upr = (upr.merge(self.user_means, how='left', left_on='user_id', right_index=True)
+                  .fillna(self.global_mean))
+        return upr['mean'] + pd.Series(preds_lst, index=upr.index)
+
 
 class NeuralModule(torch.nn.Module):
 
@@ -357,9 +500,7 @@ class LSTMReader(torch.nn.Module):
         :param batch_sentences: token indices, have dimension (sequence_length)
         :return:
         """
-        #print(f'batch_sentences: {sequences.shape}')
         embeds = self.word_embeddings(sequences)
-        #print(f'embeds: {embeds.shape}')
         packed = torch.nn.utils.rnn.pack_padded_sequence(embeds, lengths, batch_first=True)
         h0 = self.h0.repeat(1, sequences.shape[0], 1)
         c0 = self.c0.repeat(1, sequences.shape[0], 1)
@@ -367,11 +508,8 @@ class LSTMReader(torch.nn.Module):
         lstm_out, _ = torch.nn.utils.rnn.pad_packed_sequence(lstm_out, batch_first=True,
                                                              padding_value=1e-8)
         mask, _ = torch.gt(lstm_out, 1e-7).max(dim=2, keepdim=True)
-        #print(f'lstm_out: {lstm_out.shape}')
         sem_out = self.semantic_transform(lstm_out) * mask.float()
-        #print(f'sem_out: {sem_out.shape}')
         sem_max, _ = torch.max(sem_out, dim=1)
-        #print(f'sem_max: {sem_max.shape}')
         return sem_max
 
 class ClusteringModel(RecommenderModel):

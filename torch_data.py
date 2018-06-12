@@ -9,12 +9,12 @@ import utils
 
 class UserProductRatingsDataset(torch.utils.data.Dataset):
 
-    def __init__(self, data,
-            desc_vocab_size, revw_vocab_size,
-            transform=None):
+    def __init__(self, data, desc_vocab_size, revw_vocab_size,
+                 vocab_data=None, is_val=False, transform=None):
 
         self.desc_vocab_size = desc_vocab_size
         self.revw_vocab_size = revw_vocab_size
+        self.is_val = is_val
         self.transform = transform
 
         utils.base_timer.start('copying required data')
@@ -27,11 +27,16 @@ class UserProductRatingsDataset(torch.utils.data.Dataset):
         utils.base_timer.start('cleaning product descriptions and reviews')
         self._clean_descs_and_reviews()
 
-        utils.base_timer.start('building product descriptions and review vocabs')
-        self._build_vocab()
+        if vocab_data is None:
+            utils.base_timer.start('building product descriptions and review vocabs')
+            self._build_vocab()
+        else:
+            (self.desc_vocab_to_idx, self.desc_idx_to_vocab,
+             self.revw_vocab_to_idx, self.revw_idx_to_vocab) = vocab_data
 
         utils.base_timer.start('building product description and review index sequence')
         self._build_desc_revw_sequences()
+        utils.base_timer.stop()
 
     def _clean_descs_and_reviews(self):
         
@@ -95,6 +100,10 @@ class UserProductRatingsDataset(torch.utils.data.Dataset):
                     revw.append(self.revw_vocab_to_idx['<UNK>'])
             self.product_to_revw_seq[pid].append(revw)
 
+    def get_vocab_data(self):
+        return (self.desc_vocab_to_idx, self.desc_idx_to_vocab,
+                self.revw_vocab_to_idx, self.revw_idx_to_vocab)
+
     def __len__(self):
         return len(self.user_product_ratings)
 
@@ -103,8 +112,10 @@ class UserProductRatingsDataset(torch.utils.data.Dataset):
         res = {
             'user_id': row.user_id,
             'product_desc': self.product_to_desc_seq[row.product_id],
-            'product_revw': self.product_to_revw_seq[row.product_id],
-            'rating': row.rating}
+            'product_revw': self.product_to_revw_seq[row.product_id]
+        }
+        if not self.is_val:
+            res['rating'] = row.rating
         if self.transform:
             res = self.transform(res)
         return res
@@ -123,13 +134,16 @@ class ReviewSampler(object):
 
 class CombineSequences(object):
 
-    def __init__(self):
-        pass
+    def __init__(self, is_val=False):
+        self.is_val = is_val
 
     def __call__(self, batch):
 
         user_ids = torch.tensor([item['user_id'] for item in batch], dtype=torch.long)
-        ratings = torch.tensor([item['rating'] for item in batch], dtype=torch.float)
+        if not self.is_val:
+            ratings = torch.tensor([item['rating'] for item in batch], dtype=torch.float)
+        else:
+            ratings = None
 
         # padded nicely
         desc = [item['product_desc'] for item in batch]
