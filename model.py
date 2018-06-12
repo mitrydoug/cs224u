@@ -211,7 +211,7 @@ class RNNModel(RecommenderModel):
             desc_sem_size=20,
             revw_sem_size=20,
             train_epochs=10,
-            train_batch_size=256,
+            train_batch_size=16,
             learning_rate=1e-3,
             param_l2_norm=15e-5,
             user_l2_norm=75e-3,
@@ -364,9 +364,9 @@ class RNNModel(RecommenderModel):
                     for name, param in self.model.named_parameters():
                         if 'embedding' not in name:
                             param_norm += (param * param).sum()
-                    ratings_np = np.round(ratings.data.numpy())
-                    preds_round = np.round(preds.data.numpy())
-                    acc = (preds_round == ratings_np).sum() / float(len(ratings))
+                    ratings_round = torch.round(ratings)
+                    preds_round = torch.round(preds)
+                    acc = torch.eq(preds_round, ratings_round).float().sum() / float(len(ratings))
                     train_mse = alpha * train_mse + (1.-alpha)*mse/len(ratings)
                     train_acc = alpha * train_acc + (1.-alpha)*acc
                 self.logger.info(f'train, '
