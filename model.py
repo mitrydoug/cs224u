@@ -381,7 +381,8 @@ class RNNModel(RecommenderModel):
                 val_preds = self.predict(_val, dataset=val_dataset)
                 val_mse = utils.mean_squared_error(val_preds, val_ground_truth)
                 val_acc = utils.accuracy(val_preds, val_ground_truth)
-            self.logger.info(f'test: val_mse = {val_mse:05.2f}, '
+            self.logger.info(f'test, '
+                             f'val_mse = {val_mse:05.2f}, '
                              f'val_acc = {100.0*val_acc:02.2f}%')
             state = {
                 'epoch_num': epoch,
@@ -433,7 +434,7 @@ class RNNModel(RecommenderModel):
                 preds, _ = self.model(
                     user_ids, product_desc, product_desc_lens, product_desc_idxs,
                     product_revw, product_revw_lens, product_revw_idxs)
-            preds_lst += preds.tolist()
+            preds_lst += preds.cpu().tolist()
         upr = val['user_product_ratings'].copy()
         upr = (upr.merge(self.user_means, how='left', left_on='user_id', right_index=True)
                   .fillna(self.global_mean))
