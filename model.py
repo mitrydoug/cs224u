@@ -212,9 +212,9 @@ class RNNModel(RecommenderModel):
             revw_sem_size=20,
             train_epochs=20,
             train_batch_size=256,
-            learning_rate=1e-3,
+            learning_rate=1e-2,
             param_l2_norm=15e-5,
-            user_l2_norm=75e-3,
+            user_l2_norm=0,
             use_glove=False,
             load_chkpt=None
         ):
