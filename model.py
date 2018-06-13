@@ -314,7 +314,7 @@ class RNNModel(RecommenderModel):
         if self.load_chkpt is not None:
             chkpt = torch.load(self.load_chkpt)
             start_epoch = chkpt['epoch_num']
-            self.model.load_state_dict(chkpt['model_state_dict'])
+            self.model.load_state_dict(chkpt['model_state'])
             self.desc_vocab_size = chkpt['desc_vocab_size']
             self.revw_vocab_size = chkpt['revw_vocab_size']
             self.desc_embed_size = chkpt['desc_embed_size']
