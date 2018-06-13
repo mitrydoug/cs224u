@@ -161,6 +161,7 @@ class ClusteringModel():
         self._initialize_clusters()
         
         for i in range(self.num_iterations):
+            print("interation: " + str(i))
             # assign all users
             self._assign_all_users()
             # center all clusters
