@@ -286,11 +286,12 @@ class RNNModel(RecommenderModel):
 
         if self.use_glove:
             utils.base_timer.start('loading glove vectors')
-            desc_embeds = utils.get_glove_embeddings(self.train_vocab_data[1], dim=self.desc_embed_size)
-            revw_embeds = utils.get_glove_embeddings(self.train_vocab_data[3], dim=self.desc_embed_size)
+            desc_embeds, num1 = utils.get_glove_embeddings(self.train_vocab_data[1], dim=self.desc_embed_size)
+            revw_embeds, num2 = utils.get_glove_embeddings(self.train_vocab_data[3], dim=self.desc_embed_size)
             self.desc_vocab_size, _ = desc_embeds.shape
             self.revw_vocab_size, _ = revw_embeds.shape
             utils.base_timer.stop()
+            print(f'allocated {num1} and {num2} random vectors')
         else:
             desc_embeds, revw_embeds = None, None
 
@@ -497,8 +498,8 @@ class LSTMReader(torch.nn.Module):
         super(LSTMReader, self).__init__()
         if embeds is not None:
             embeds_t = torch.tensor(embeds, device='cuda' if torch.cuda.is_available() else 'cpu',
-                                            dtype=torch.float)
-            self.word_embeddings = torch.nn.Embedding.from_pretrained(embeds_t)
+                                            dtype=torch.float, requires_grad=True)
+            self.word_embeddings = torch.nn.Embedding.from_pretrained(embeds_t, freeze=False)
             self.word_embeddings.sparse = True
         else:
             self.word_embeddings = torch.nn.Embedding(vocab_size, embedding_dim, sparse=True)

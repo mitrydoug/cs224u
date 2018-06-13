@@ -44,8 +44,13 @@ def get_glove_embeddings(idx_to_vocab, dim=100):
         for line in f:
             tokens = line.strip().split(' ')
             words[tokens[0]] = np.array(list(map(float, tokens[1:])))
-    embeddings = np.array([
-        words[idx_to_vocab[i]] if (idx_to_vocab[i] in words)
-                               else np.random.normal(0, 0.7, dim)
-              for i in range(N)])
-    return embeddings
+    embeds = []
+    num_random = 0
+    for i in range(N):
+        if idx_to_vocab[i] in words:
+            embeds.append(words[idx_to_vocab[i]])
+        else:
+            num_random += 1
+            embeds.append(np.random.normal(0, 0.7, dim))
+    embeds = np.array(embeds)
+    return embeds, num_random
