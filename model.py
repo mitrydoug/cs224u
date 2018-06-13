@@ -531,8 +531,8 @@ class LSTMReader(torch.nn.Module):
                                                              padding_value=1e-8)
         mask, _ = torch.gt(lstm_out, 1e-7).max(dim=2, keepdim=True)
         sem_out = self.semantic_transform(lstm_out) * mask.float()
-        sem_max, _ = torch.nn.functional.sigmoid(torch.sum(sem_out, dim=1))
-        return sem_max
+        result = torch.nn.functional.sigmoid(torch.sum(sem_out, dim=1))
+        return result
 
 class ClusteringModel(RecommenderModel):
     def __init__(self, **kwargs):
