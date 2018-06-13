@@ -210,11 +210,12 @@ class RNNModel(RecommenderModel):
             revw_embed_size=100,
             desc_sem_size=20,
             revw_sem_size=20,
-            train_epochs=10,
+            train_epochs=20,
             train_batch_size=256,
-            learning_rate=1e-2,
+            learning_rate=1e-3,
             param_l2_norm=15e-5,
             user_l2_norm=75e-3,
+            use_glove=False,
             load_chkpt=None
         ):
         RecommenderModel.__init__(self)
@@ -229,6 +230,7 @@ class RNNModel(RecommenderModel):
         self.lr = learning_rate
         self.param_l2_norm = param_l2_norm
         self.user_l2_norm = user_l2_norm
+        self.use_glove = use_glove
         self.load_chkpt = load_chkpt
 
         # we add one for the bias term of a linear classifier
@@ -282,6 +284,17 @@ class RNNModel(RecommenderModel):
                                                   collate_fn=CombineSequences(),
                                                   drop_last=False)
 
+        if self.use_glove:
+            utils.base_timer.start('loading glove vectors')
+            desc_embeds = utils.get_glove_embeddings(self.train_vocab_data[1], dim=self.desc_embed_size)
+            revw_embeds = utils.get_glove_embeddings(self.train_vocab_data[3], dim=self.desc_embed_size)
+            self.desc_vocab_size, _ = desc_embeds.shape
+            self.revw_vocab_size, _ = revw_embeds.shape
+            utils.base_timer.stop()
+        else:
+            desc_embeds, revw_embeds = None, None
+
+
         # validation setup
         val_ground_truth = val['user_product_ratings'].rating
         _val = dict(val)
@@ -295,7 +308,7 @@ class RNNModel(RecommenderModel):
         self.model = NeuralModule(
             self.desc_embed_size, self.desc_vocab_size, self.desc_sem_size,
             self.revw_embed_size, self.revw_vocab_size, self.revw_sem_size,
-            self.user_embed_size, num_users)
+            self.user_embed_size, num_users, desc_embeds, revw_embeds)
 
         if self.load_chkpt is not None:
             chkpt = torch.load(self.load_chkpt)
@@ -333,7 +346,7 @@ class RNNModel(RecommenderModel):
         train_mse = 0
         alpha = 0.9
         for epoch in range(start_epoch, self.train_epochs):
-            self.logger.info(f'epoch {epoch}')
+            self.logger.info(f'epoch {epoch}/{self.train_epochs}')
             for i_batch, (user_ids, ratings, product_desc, product_desc_lens, product_desc_idxs,
                                              product_revw, product_revw_lens, product_revw_idxs) \
                     in enumerate(data_loader):
@@ -446,15 +459,15 @@ class NeuralModule(torch.nn.Module):
     def __init__(self,
             desc_embed_size, desc_vocab_size, desc_sem_size,
             revw_embed_size, revw_vocab_size, revw_sem_size,
-            user_embed_size, num_users
+            user_embed_size, num_users, desc_embeds, revw_embeds
         ):
         super(NeuralModule, self).__init__()
         self.num_users = num_users+1
         utils.base_timer.start('initializing description reader')
-        self.desc_reader = LSTMReader(desc_embed_size, desc_vocab_size, desc_sem_size)
+        self.desc_reader = LSTMReader(desc_embed_size, desc_vocab_size, desc_sem_size, desc_embeds)
 
         utils.base_timer.start('initializing review reader')
-        self.revw_reader = LSTMReader(revw_embed_size, revw_vocab_size, revw_sem_size)
+        self.revw_reader = LSTMReader(revw_embed_size, revw_vocab_size, revw_sem_size, revw_embeds)
 
         utils.base_timer.start('initializing user embeddings')
         self.user_embeddings = torch.nn.Embedding(self.num_users, user_embed_size, sparse=True)
@@ -480,9 +493,15 @@ class NeuralModule(torch.nn.Module):
 
 class LSTMReader(torch.nn.Module):
 
-    def __init__(self, embedding_dim, vocab_size, output_dim, hidden_dim=100, dropout=0.5):
+    def __init__(self, embedding_dim, vocab_size, output_dim, embeds=None, hidden_dim=100, dropout=0.5):
         super(LSTMReader, self).__init__()
-        self.word_embeddings = torch.nn.Embedding(vocab_size, embedding_dim, sparse=True)
+        if embeds is not None:
+            embeds_t = torch.tensor(embeds, device='cuda' if torch.cuda.is_available() else 'cpu',
+                                            dtype=torch.float)
+            self.word_embeddings = torch.nn.Embedding.from_pretrained(embeds_t)
+            self.word_embeddings.sparse = True
+        else:
+            self.word_embeddings = torch.nn.Embedding(vocab_size, embedding_dim, sparse=True)
         self.lstm = torch.nn.LSTM(embedding_dim, hidden_dim, batch_first=True)
         self.semantic_transform = torch.nn.Sequential(
             torch.nn.Dropout(p=dropout),

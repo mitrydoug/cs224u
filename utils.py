@@ -36,29 +36,16 @@ def mean_squared_error(pred, ground_truth):
 def accuracy(pred, ground_truth):
     return (np.round(pred) == ground_truth).sum() / float(len(pred))
 
-def load_glove(glove_data_file):
-    words = pd.read_table(glove_data_file, sep=" ", index_col=0, header=None, quoting=csv.QUOTE_NONE)
-    return words
-
-def convert_word_to_vec(model, w, embed_size, verbose=True):
-    if w in model.index:
-        if verbose:
-            print("found")
-        return model.loc[w].as_matrix()
-    else:
-        if verbose:
-            print("not found")
-        return np.random.normal(0, 0.7, embed_size)
-
-def create_vsm(corpus, embed_size=50, glove_file_path='glove.6B'):
-    vsm_list = []
-    vocab = set(corpus)
-    assert(embed_size == 50 or embed_size==100)
-    glove_file = os.path.join(glove_file_path, 'glove.6B.%dd.txt' % embed_size)
-    model = None
-    model = load_glove(glove_file)
-    if model is not None:
-        for word in vocab:
-            word_as_vec = convert_word_to_vec(model, word, embed_size)
-            vsm_list.append(word_as_vec)
-    return np.array(vsm_list)
+def get_glove_embeddings(idx_to_vocab, dim=100):
+    glove_fn = f'data/glove.6B.{dim}d.txt'
+    N = len(idx_to_vocab)
+    words = dict()
+    with open(glove_fn, 'r') as f:
+        for line in f:
+            tokens = line.strip().split(' ')
+            words[tokens[0]] = np.array(list(map(float, tokens[1:])))
+    embeddings = np.array([
+        words[idx_to_vocab[i]] if (idx_to_vocab[i] in words)
+                               else np.random.normal(0, 0.7, dim)
+              for i in range(N)])
+    return embeddings
