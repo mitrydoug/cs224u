@@ -506,8 +506,7 @@ class LSTMReader(torch.nn.Module):
         self.lstm = torch.nn.LSTM(embedding_dim, hidden_dim, batch_first=True)
         self.semantic_transform = torch.nn.Sequential(
             torch.nn.Dropout(p=dropout),
-            torch.nn.Linear(hidden_dim, output_dim),
-            torch.nn.Sigmoid(),
+            torch.nn.Linear(hidden_dim, output_dim)
         )
         self.num_directions = 1
         self.num_layers = 1
@@ -532,7 +531,7 @@ class LSTMReader(torch.nn.Module):
                                                              padding_value=1e-8)
         mask, _ = torch.gt(lstm_out, 1e-7).max(dim=2, keepdim=True)
         sem_out = self.semantic_transform(lstm_out) * mask.float()
-        sem_max, _ = torch.max(sem_out, dim=1)
+        sem_max, _ = torch.nn.functional.sigmoid(torch.sum(sem_out, dim=1))
         return sem_max
 
 class ClusteringModel(RecommenderModel):
